@@ -1,0 +1,37 @@
+name: wasfa_rider
+description: WASFA Rider — Delivery driver app for Kuwait pharmacy deliveries.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  provider: ^6.1.2
+
+  # Maps & location
+  google_maps_flutter: ^2.6.1
+  geolocator: ^11.0.0
+  permission_handler: ^11.3.1
+
+  # Google Fonts
+  google_fonts: ^6.2.1
+
+  # Image / signature / camera
+  image_picker: ^1.1.2
+  signature: ^5.4.0
+
+  # Storage
+  shared_preferences: ^2.2.3
+
+  # Utils
+  intl: ^0.19.0
+  url_launcher: ^6.3.0
+  flutter_svg: ^2.0.10+1
+
+flutter:
+  uses-material-design: true
