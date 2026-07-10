@@ -115,7 +115,7 @@ class _LangRow extends StatelessWidget {
 // ── LOGIN SCREEN ───────────────────────────────────────────────
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.onSubmit});
-  final ValueChanged<String> onSubmit;
+  final void Function(String phone) onSubmit; // may kick off an async OTP request
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -214,6 +214,19 @@ class _LoginScreenState extends State<LoginScreen> {
                     ]),
                   ),
                   const SizedBox(height: 14),
+                  if (context.watch<AppViewModel>().error != null)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        context.watch<AppViewModel>().error!,
+                        style: GoogleFonts.dmSans(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
                   SizedBox(
                     width: double.infinity,
                     child: AnimatedContainer(
@@ -256,7 +269,7 @@ class _LoginScreenState extends State<LoginScreen> {
 class OtpScreen extends StatefulWidget {
   const OtpScreen({super.key, required this.phone, required this.onVerified});
   final String phone;
-  final VoidCallback onVerified;
+  final ValueChanged<String> onVerified; // now passes the entered 6-digit code
 
   @override
   State<OtpScreen> createState() => _OtpScreenState();
@@ -350,7 +363,8 @@ class _OtpScreenState extends State<OtpScreen> {
                             if (v.isEmpty && i > 0) _nodes[i - 1].requestFocus();
                             _checkComplete();
                             if (_complete) {
-                              Future.delayed(const Duration(milliseconds: 400), widget.onVerified);
+                              Future.delayed(const Duration(milliseconds: 400),
+                                  () => widget.onVerified(_ctrls.map((c) => c.text).join()));
                             }
                           },
                         ),
@@ -360,19 +374,35 @@ class _OtpScreenState extends State<OtpScreen> {
                 ),
               ),
               const SizedBox(height: 22),
-              Center(
-                child: RichText(text: TextSpan(
-                  style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.7), fontSize: 12),
-                  children: [
-                    const TextSpan(text: 'Demo OTP: '),
-                    TextSpan(text: '123456', style: GoogleFonts.dmSans(color: WTheme.aqua, fontWeight: FontWeight.w800)),
-                    const TextSpan(text: ' (any 6 digits work)'),
-                  ],
-                )),
-              ),
+              if (context.watch<AppViewModel>().devOtpHint != null)
+                Center(
+                  child: RichText(text: TextSpan(
+                    style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    children: [
+                      const TextSpan(text: 'Dev OTP (from backend): '),
+                      TextSpan(
+                        text: context.watch<AppViewModel>().devOtpHint!,
+                        style: GoogleFonts.dmSans(color: WTheme.aqua, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  )),
+                ),
+              if (context.watch<AppViewModel>().error != null)
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    context.watch<AppViewModel>().error!,
+                    style: GoogleFonts.dmSans(color: Colors.white, fontSize: 12),
+                  ),
+                ),
               const Spacer(),
               Center(child: TextButton(
-                onPressed: () {},
+                onPressed: () => context.read<AppViewModel>().requestOtp(widget.phone),
                 child: Text(s.get('resend'), style: GoogleFonts.dmSans(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
               )),
               const SizedBox(height: 6),
@@ -389,7 +419,7 @@ class _OtpScreenState extends State<OtpScreen> {
                     color: Colors.transparent,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(14),
-                      onTap: _complete ? widget.onVerified : null,
+                      onTap: _complete ? () => widget.onVerified(_ctrls.map((c) => c.text).join()) : null,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 18),
                         child: Center(child: Text(s.get('verify'),
@@ -516,9 +546,15 @@ class _VehicleSetupScreenState extends State<VehicleSetupScreen> {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(14),
                     onTap: _valid
-                        ? () {
-                      context.read<AppViewModel>().login(widget.phone, vehicle: _selected, plate: _plateCtrl.text.trim());
-                      widget.onContinue();
+                        ? () async {
+                      final vehicleTypeStr = _selected == VehicleType.car
+                          ? 'car'
+                          : _selected == VehicleType.scooter ? 'scooter' : 'motorbike';
+                      final ok = await context.read<AppViewModel>().completeVehicleSetup(
+                        vehicleType: vehicleTypeStr,
+                        plateNumber: _plateCtrl.text.trim(),
+                      );
+                      if (ok) widget.onContinue();
                     }
                         : null,
                     child: Padding(

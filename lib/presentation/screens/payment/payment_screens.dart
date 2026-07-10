@@ -6,6 +6,7 @@ import 'package:signature/signature.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 // ── PAYMENT SCREEN ─────────────────────────────────────────────
 class PaymentScreen extends StatelessWidget {
@@ -44,7 +45,7 @@ class PaymentScreen extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Collect payment', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
+                Text(context.tr('collectPayment'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
                 Text('#${order.id} · ${order.patient}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
               ]),
             ]),
@@ -67,7 +68,7 @@ class PaymentScreen extends StatelessWidget {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.30), blurRadius: 30, offset: const Offset(0, 12))],
                 ),
                 child: Column(children: [
-                  Text('AMOUNT DUE', style: GoogleFonts.dmSans(
+                  Text(context.tr('amountDue'), style: GoogleFonts.dmSans(
                       color: Colors.white.withOpacity(0.7), fontSize: 11,
                       fontWeight: FontWeight.w700, letterSpacing: 0.5)),
                   const SizedBox(height: 6),
@@ -75,7 +76,7 @@ class PaymentScreen extends StatelessWidget {
                     children: [
                       TextSpan(text: order.total.toStringAsFixed(3),
                           style: GoogleFonts.dmSans(color: Colors.white, fontSize: 48, fontWeight: FontWeight.w800)),
-                      TextSpan(text: ' KD',
+                      TextSpan(text: ' ${context.tr('kd')}',
                           style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 18, fontWeight: FontWeight.w600)),
                     ],
                   )),
@@ -86,22 +87,22 @@ class PaymentScreen extends StatelessWidget {
                       color: WTheme.warn.withOpacity(0.25),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text('⏳ NOT PAID YET', style: GoogleFonts.dmSans(
+                    child: Text(context.tr('notPaidYet'), style: GoogleFonts.dmSans(
                         color: const Color(0xFFFFD08A), fontSize: 11, fontWeight: FontWeight.w700)),
                   ),
                 ]),
               ),
               // Payment options — all 3 always shown matching HTML
               _PayOption(
-                emoji: '💵', label: 'Cash', desc: 'Collect physical cash now',
+                emoji: '💵', label: context.tr('cashLabel'), desc: context.tr('collectCashNow'),
                 color: WTheme.warn, onTap: onCollectCash,
               ),
               _PayOption(
-                emoji: '💳', label: 'KNET', desc: 'Card at the door',
+                emoji: '💳', label: context.tr('knetLabel'), desc: context.tr('cardAtDoor'),
                 color: WTheme.sky, onTap: onCollectKnet,
               ),
               _PayOption(
-                emoji: '🔗', label: 'Send payment link', desc: 'WhatsApp checkout to patient',
+                emoji: '🔗', label: context.tr('sendPaymentLink'), desc: context.tr('whatsappCheckout'),
                 color: WTheme.ok, onTap: onSendLink,
               ),
             ]),
@@ -198,8 +199,8 @@ class _CashAmountScreenState extends State<CashAmountScreen> {
               ),
               const SizedBox(width: 12),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Cash received', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
-                Text('Type the amount the patient gave', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+                Text(context.tr('cashReceived'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
+                Text(context.tr('typeAmountGiven'), style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
               ]),
             ]),
           ),
@@ -215,11 +216,11 @@ class _CashAmountScreenState extends State<CashAmountScreen> {
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
                     boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.15), blurRadius: 22, offset: const Offset(0, 8))]),
                 child: Column(children: [
-                  Text('ORDER TOTAL', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                  Text(context.tr('orderTotalCap'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
                   const SizedBox(height: 4),
                   RichText(text: TextSpan(children: [
                     TextSpan(text: widget.order.total.toStringAsFixed(3), style: GoogleFonts.dmSans(fontSize: 32, color: WTheme.navy, fontWeight: FontWeight.w800)),
-                    TextSpan(text: ' KD', style: GoogleFonts.dmSans(fontSize: 14, color: WTheme.muted, fontWeight: FontWeight.w600)),
+                    TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 14, color: WTheme.muted, fontWeight: FontWeight.w600)),
                   ])),
                 ]),
               ),
@@ -230,7 +231,7 @@ class _CashAmountScreenState extends State<CashAmountScreen> {
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
                     boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.15), blurRadius: 22, offset: const Offset(0, 8))]),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('PATIENT GAVE', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                  Text(context.tr('patientGave'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
                   TextField(
                     controller: _ctrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -254,11 +255,11 @@ class _CashAmountScreenState extends State<CashAmountScreen> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Change to give', style: GoogleFonts.dmSans(fontSize: 12, color: Colors.white.withOpacity(0.85))),
+                      Text(context.tr('changeToGive'), style: GoogleFonts.dmSans(fontSize: 12, color: Colors.white.withOpacity(0.85))),
                       const SizedBox(height: 4),
                       RichText(text: TextSpan(children: [
                         TextSpan(text: _change.toStringAsFixed(3), style: GoogleFonts.dmSans(fontSize: 28, color: Colors.white, fontWeight: FontWeight.w800)),
-                        TextSpan(text: ' KD', style: GoogleFonts.dmSans(fontSize: 14, color: Colors.white.withOpacity(0.85), fontWeight: FontWeight.w600)),
+                        TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 14, color: Colors.white.withOpacity(0.85), fontWeight: FontWeight.w600)),
                       ])),
                     ]),
                   ),
@@ -270,7 +271,7 @@ class _CashAmountScreenState extends State<CashAmountScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
             child: SwipeToConfirm(
-              label: 'Confirm cash received',
+              label: context.tr('confirmCashReceived'),
               color: WTheme.ok,
               onConfirm: () => widget.onConfirm(_given),
             ),
@@ -291,7 +292,11 @@ class SendLinkScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final initials = order.patient.split(' ').map((n) => n.isNotEmpty ? n[0] : '').take(2).join();
     final link = 'pay.wasfakw.com/o/${order.id}';
-    final preview = 'Hi ${order.patient}, your payment link for WASFA order #${order.id}: $link · ${order.total.toStringAsFixed(3)} KD';
+    final preview = context.tr('whatsappPreviewTemplate')
+        .replaceFirst('{name}', order.patient)
+        .replaceFirst('{id}', order.id)
+        .replaceFirst('{link}', link)
+        .replaceFirst('{total}', order.total.toStringAsFixed(3));
     return Scaffold(
       backgroundColor: WTheme.blush,
       body: SafeArea(
@@ -310,8 +315,8 @@ class SendLinkScreen extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Send payment link', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
-                Text('via WhatsApp', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+                Text(context.tr('sendPaymentLink'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
+                Text(context.tr('viaWhatsapp'), style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
               ]),
             ]),
           ),
@@ -334,10 +339,10 @@ class SendLinkScreen extends StatelessWidget {
                   child: const Center(child: Text('💬', style: TextStyle(fontSize: 40))),
                 ),
                 const SizedBox(height: 14),
-                Text('Pay ${order.total.toStringAsFixed(3)} KD via link',
+                Text('Pay ${order.total.toStringAsFixed(3)} ${context.tr('kd')} ${context.tr('viaLinkSuffix')}',
                     style: GoogleFonts.dmSans(fontSize: 18, color: WTheme.navy, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 8),
-                Text('Patient pays from their phone. Order auto-marks PAID when payment lands.',
+                Text(context.tr('patientPaysAutoMark'),
                     style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, height: 1.5), textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 // Patient row
@@ -369,7 +374,7 @@ class SendLinkScreen extends StatelessWidget {
                     border: Border.all(color: const Color(0xFF25D366).withOpacity(0.4)),
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('📎 Preview:', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
+                    Text(context.tr('previewLabel'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
                     const SizedBox(height: 4),
                     Text('"$preview"', style: GoogleFonts.dmSans(fontSize: 11, color: const Color(0xFF128C7E), fontWeight: FontWeight.w700, height: 1.4)),
                   ]),
@@ -379,7 +384,7 @@ class SendLinkScreen extends StatelessWidget {
           )),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
-            child: SwipeToConfirm(label: 'Send via WhatsApp', color: WTheme.ok, onConfirm: onSent),
+            child: SwipeToConfirm(label: context.tr('sendViaWhatsapp'), color: WTheme.ok, onConfirm: onSent),
           ),
         ]),
       ),
@@ -391,7 +396,8 @@ class SendLinkScreen extends StatelessWidget {
 class PhotoPODScreen extends StatefulWidget {
   const PhotoPODScreen({super.key, required this.order, required this.onBack, required this.onCaptured});
   final Order order;
-  final VoidCallback onBack, onCaptured;
+  final VoidCallback onBack;
+  final ValueChanged<String> onCaptured; // now passes the real captured file path
 
   @override
   State<PhotoPODScreen> createState() => _PhotoPODScreenState();
@@ -399,10 +405,28 @@ class PhotoPODScreen extends StatefulWidget {
 
 class _PhotoPODScreenState extends State<PhotoPODScreen> {
   bool _captured = false;
+  bool _capturing = false;
 
-  void _capture() {
-    setState(() => _captured = true);
-    Future.delayed(const Duration(milliseconds: 500), widget.onCaptured);
+  // NOTE: this used to be entirely fake (setState + a delay, no real photo
+  // at all) even though the visual mock behind it looks like a live camera.
+  // The backend's POST /orders/{co}/finish now CONFIRMED requires a real
+  // pod_photo file, so this now actually opens the device camera via
+  // image_picker (same approach used for profile document uploads) and
+  // passes the real file path up. The door/Rx-bag graphic is still just a
+  // decorative backdrop, not a live viewfinder — building an actual camera
+  // preview would need the `camera` package instead of image_picker.
+  Future<void> _capture() async {
+    if (_capturing) return;
+    setState(() => _capturing = true);
+    try {
+      final file = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+      if (file == null) { setState(() => _capturing = false); return; }
+      setState(() => _captured = true);
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (mounted) widget.onCaptured(file.path);
+    } catch (_) {
+      if (mounted) setState(() => _capturing = false);
+    }
   }
 
   @override
@@ -486,10 +510,10 @@ class _PhotoPODScreenState extends State<PhotoPODScreen> {
               boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 30, offset: Offset(0, 10))],
             ),
             child: Column(children: [
-              Text('📸 Photo of medication at door',
+              Text(context.tr('photoOfMedication'),
                   style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 13, color: WTheme.navy)),
               const SizedBox(height: 2),
-              Text('POD step 1 of 2 · Order #${widget.order.id}',
+              Text(context.tr('podStep1').replaceFirst('{id}', widget.order.id),
                   style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
             ]),
           ),
@@ -601,7 +625,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
   @override
   void initState() {
     super.initState();
-    _recipientCtrl = TextEditingController(text: 'Recipient: ${widget.order.patient}');
+    _recipientCtrl = TextEditingController(text: '${context.tr('recipientPrefix')}: ${widget.order.patient}');
     _sig.addListener(() { if (mounted) setState(() {}); });
   }
 
@@ -634,8 +658,8 @@ class _SignatureScreenState extends State<SignatureScreen> {
             ),
             const SizedBox(width: 12),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Confirm handover', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
-              Text('POD step 2 of 2 · #${widget.order.id}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+              Text(context.tr('confirmHandover'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
+              Text('${context.tr('podStep2').replaceFirst('{id}', widget.order.id)}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
             ]),
           ]),
         ),
@@ -655,8 +679,8 @@ class _SignatureScreenState extends State<SignatureScreen> {
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
               boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.12), blurRadius: 18, offset: const Offset(0, 6))]),
           child: Row(children: [
-            _ModeTab(label: '✍️ Signature', active: _mode == 'signature', onTap: () => setState(() => _mode = 'signature')),
-            _ModeTab(label: '📱 OTP code',  active: _mode == 'otp',       onTap: () => setState(() => _mode = 'otp')),
+            _ModeTab(label: context.tr('signatureTab'), active: _mode == 'signature', onTap: () => setState(() => _mode = 'signature')),
+            _ModeTab(label: context.tr('otpCodeTab'),  active: _mode == 'otp',       onTap: () => setState(() => _mode = 'otp')),
           ]),
         ),
         // Body
@@ -692,13 +716,13 @@ class _SignatureScreenState extends State<SignatureScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 8, 18, 22),
           child: _canConfirm
-              ? SwipeToConfirm(label: 'Confirm delivery', color: WTheme.ok, onConfirm: widget.onSigned)
+              ? SwipeToConfirm(label: context.tr('confirmDelivery'), color: WTheme.ok, onConfirm: widget.onSigned)
               : Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 20),
             decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(14)),
             child: Center(child: Text(
-              _mode == 'signature' ? 'Capture signature above' : 'Type the 6-digit code',
+              _mode == 'signature' ? context.tr('captureSignatureAbove') : context.tr('typeSixDigitCode'),
               style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13, fontWeight: FontWeight.w700),
             )),
           ),
@@ -733,7 +757,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
             if (!_sig.isNotEmpty)
               Positioned(
                 bottom: 35, left: 0, right: 0,
-                child: Center(child: Text('SIGN WITH YOUR FINGER ABOVE THE LINE',
+                child: Center(child: Text(context.tr('signWithFinger'),
                     style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5))),
               ),
           ]),
@@ -747,10 +771,10 @@ class _SignatureScreenState extends State<SignatureScreen> {
             child: Row(children: [
               Text('🔄', style: const TextStyle(fontSize: 13)),
               const SizedBox(width: 4),
-              Text('Clear', style: GoogleFonts.dmSans(color: WTheme.err, fontWeight: FontWeight.w700, fontSize: 12)),
+              Text(context.tr('clear'), style: GoogleFonts.dmSans(color: WTheme.err, fontWeight: FontWeight.w700, fontSize: 12)),
             ]),
           ),
-          Text('Patient: ${widget.order.patient}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12)),
+          Text('${context.tr('patientPrefix')}: ${widget.order.patient}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12)),
         ]),
       ),
     ]);
@@ -765,9 +789,9 @@ class _SignatureScreenState extends State<SignatureScreen> {
         RichText(textAlign: TextAlign.center, text: TextSpan(
           style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.muted, height: 1.5),
           children: [
-            const TextSpan(text: 'A 6-digit code was just sent to '),
+            TextSpan(text: context.tr('otpSentTemplate').split('{phone}').first),
             TextSpan(text: widget.order.phone, style: TextStyle(color: WTheme.navy, fontWeight: FontWeight.w800)),
-            const TextSpan(text: ' via WhatsApp.\nAsk the patient and type it here.'),
+            TextSpan(text: context.tr('otpSentTemplate').split('{phone}').last),
           ],
         )),
         const SizedBox(height: 16),
@@ -797,10 +821,15 @@ class _SignatureScreenState extends State<SignatureScreen> {
           )),
         ),
         const SizedBox(height: 14),
+        // NOTE: same leftover-mock pattern found earlier in the login OTP
+        // screen — this isn't wired to any real backend OTP-send/verify
+        // call, it's a purely client-side placeholder. Flagging rather
+        // than silently leaving it, since it could mislead a driver into
+        // thinking any 6 digits will always work.
         RichText(text: TextSpan(
           style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted),
           children: [
-            const TextSpan(text: 'Demo code: '),
+            TextSpan(text: context.tr('demoCode')),
             TextSpan(text: '123456', style: TextStyle(color: WTheme.rose, fontWeight: FontWeight.w800)),
           ],
         )),
@@ -928,10 +957,10 @@ class _SuccessScreenState extends State<SuccessScreen>
               ),
               const SizedBox(height: 22),
               // Title
-              Text('Delivered!', style: GoogleFonts.dmSans(
+              Text(context.tr('deliveredBang'), style: GoogleFonts.dmSans(
                   color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
               const SizedBox(height: 6),
-              Text('Order #${widget.order.id} · ${widget.order.total.toStringAsFixed(3)} KD',
+              Text('${context.tr('orderPrefix')} #${widget.order.id} · ${widget.order.total.toStringAsFixed(3)} ${context.tr('kd')}',
                   style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 14)),
               const SizedBox(height: 26),
               // Next stop card OR all-done message
@@ -953,8 +982,8 @@ class _SuccessScreenState extends State<SuccessScreen>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Earnings bump', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 12)),
-                      Text('+${widget.earningsBump.toStringAsFixed(3)} KD',
+                      Text(context.tr('earningsBump'), style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 12)),
+                      Text('+${widget.earningsBump.toStringAsFixed(3)} ${context.tr('kd')}',
                           style: GoogleFonts.dmSans(color: const Color(0xFFB7F5CE), fontSize: 14, fontWeight: FontWeight.w800)),
                     ],
                   ),
@@ -965,7 +994,7 @@ class _SuccessScreenState extends State<SuccessScreen>
               Padding(
                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                 child: SwipeToConfirm(
-                  label: next != null ? 'Start next stop' : 'Finish shift',
+                  label: next != null ? context.tr('startNextStop') : context.tr('finishShift'),
                   color: WTheme.aqua,
                   onConfirm: widget.onContinue,
                 ),
@@ -990,10 +1019,10 @@ class _SuccessScreenState extends State<SuccessScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(color: WTheme.aqua, borderRadius: BorderRadius.circular(6)),
-            child: Text('NEXT STOP', style: GoogleFonts.dmSans(
+            child: Text(context.tr('nextStopCap'), style: GoogleFonts.dmSans(
                 color: WTheme.navy, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
           ),
-          Text('Stop ${next.stopNumber}', style: GoogleFonts.dmSans(
+          Text('${context.tr('stopLabel')} ${next.stopNumber}', style: GoogleFonts.dmSans(
               color: Colors.white.withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.w700)),
         ]),
         const SizedBox(height: 10),
@@ -1003,12 +1032,12 @@ class _SuccessScreenState extends State<SuccessScreen>
         const SizedBox(height: 10),
         Row(children: [
           Text('📍 ', style: const TextStyle(fontSize: 11)),
-          Text('${next.distanceKm} km', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
+          Text('${next.distanceKm} ${context.tr('km')}', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
           const SizedBox(width: 14),
           Text('⏱ ', style: const TextStyle(fontSize: 11)),
-          Text('${next.etaMin} min', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
+          Text('${next.etaMin} ${context.tr('minLabel')}', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
           const SizedBox(width: 14),
-          Text(next.paid ? '✓ Paid' : '💵 ${next.payMethod.name.toUpperCase()}',
+          Text(next.paid ? context.tr('paidCheckmark') : '💵 ${next.payMethod.name.toUpperCase()}',
               style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
         ]),
       ]),
@@ -1021,7 +1050,7 @@ class _SuccessScreenState extends State<SuccessScreen>
       child: Column(children: [
         const Text('🎉', style: TextStyle(fontSize: 32)),
         const SizedBox(height: 8),
-        Text('All deliveries done! Time for cash handover.',
+        Text(context.tr('allDeliveriesDone'),
             style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 14),
             textAlign: TextAlign.center),
       ]),
@@ -1044,42 +1073,55 @@ class _FailedDeliveryScreenState extends State<FailedDeliveryScreen> {
   String? _selected;
   final _noteCtrl = TextEditingController();
 
+  // (API code, translation key) pairs — the CODE is what gets sent to
+  // POST /orders/{co}/fail's `reason` field and must stay stable
+  // regardless of display language. UNCONFIRMED exact codes backend
+  // expects beyond 'other' (the only one shown in the Postman example) —
+  // these are reasonable guesses; verify with backend and adjust the
+  // first element of each pair if wrong (display labels are unaffected).
+  // (API value, translation key) pairs — the first element is what gets
+  // sent to POST /orders/{co}/fail's `reason` field and must stay stable
+  // (always English) regardless of display language. UPDATED to match the
+  // v3 Postman collection's example ("Customer not reachable" — a
+  // descriptive sentence), which supersedes the v2 example that showed a
+  // short snake_case code ("other"). Still not 100% confirmed beyond that
+  // one example — verify the exact accepted strings with backend.
   static const _reasons = [
-    'Patient not home',
-    'Patient refused delivery',
-    'Wrong address',
-    'Patient not reachable',
-    'Payment issue',
-    'Items damaged',
-    'Other',
+    ('Patient not home', 'patientNotHome'),
+    ('Patient refused delivery', 'patientRefused'),
+    ('Wrong address', 'wrongAddress'),
+    ('Customer not reachable', 'patientNotReachable'),
+    ('Payment issue', 'paymentIssue'),
+    ('Items damaged', 'itemsDamaged'),
+    ('Other', 'otherReason'),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Column(children: [
-        _Header(title: 'Failed Delivery', onBack: widget.onBack),
+        _Header(title: context.tr('failedDeliveryTitle'), onBack: widget.onBack),
         Expanded(child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Select a reason:', style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, fontSize: 14, color: WTheme.muted)),
+            Text(context.tr('selectReason'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, fontSize: 14, color: WTheme.muted)),
             const SizedBox(height: 10),
             ..._reasons.map((r) => GestureDetector(
-              onTap: () => setState(() => _selected = r),
+              onTap: () => setState(() => _selected = r.$1),
               child: Container(
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: _selected == r ? WTheme.err.withOpacity(0.08) : Colors.white,
+                  color: _selected == r.$1 ? WTheme.err.withOpacity(0.08) : Colors.white,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _selected == r ? WTheme.err : WTheme.cloud, width: 1.5),
+                  border: Border.all(color: _selected == r.$1 ? WTheme.err : WTheme.cloud, width: 1.5),
                 ),
                 child: Row(children: [
-                  Icon(_selected == r ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                      color: _selected == r ? WTheme.err : WTheme.muted, size: 20),
+                  Icon(_selected == r.$1 ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                      color: _selected == r.$1 ? WTheme.err : WTheme.muted, size: 20),
                   const SizedBox(width: 10),
-                  Text(r, style: GoogleFonts.dmSans(fontWeight: FontWeight.w600, fontSize: 14,
-                      color: _selected == r ? WTheme.err : WTheme.ink)),
+                  Text(context.tr(r.$2), style: GoogleFonts.dmSans(fontWeight: FontWeight.w600, fontSize: 14,
+                      color: _selected == r.$1 ? WTheme.err : WTheme.ink)),
                 ]),
               ),
             )),
@@ -1088,7 +1130,7 @@ class _FailedDeliveryScreenState extends State<FailedDeliveryScreen> {
               controller: _noteCtrl,
               maxLines: 3,
               decoration: InputDecoration(
-                hintText: 'Additional notes (optional)',
+                hintText: context.tr('additionalNotes'),
                 filled: true, fillColor: WTheme.cloud,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
               ),
@@ -1097,7 +1139,7 @@ class _FailedDeliveryScreenState extends State<FailedDeliveryScreen> {
             SizedBox(width: double.infinity, child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: WTheme.err, padding: const EdgeInsets.symmetric(vertical: 16)),
               onPressed: _selected != null ? () => widget.onConfirm(_selected!) : null,
-              child: Text('Report as Failed', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
+              child: Text(context.tr('reportAsFailed'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
             )),
           ],
         )),

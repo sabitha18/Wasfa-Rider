@@ -1,204 +1,225 @@
-import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
+import '../../core/network/api_client.dart';
+import '../../core/network/api_config.dart';
 import '../models/models.dart';
 
-/// Mock data — mirrors the HTML prototype's SEED_ORDERS and SEED_BATCH.
+/// Replaces the old seed-data OrderRepository with real API calls.
+/// `id` on Order is the order `code` (e.g. "APM10061"). Some routes
+/// (arrive/pickup/finish/fail/building-photos/geocode) use `{co}`, which
+/// per the Postman collection looks like a *numeric* order id, separate
+/// from the human-readable `code`. UNCONFIRMED whether `co` == `code` or
+/// a different internal id — if delivery-flow calls 404, this is the
+/// first thing to check with backend. For now this repo assumes co == code.
 class OrderRepository {
-  static List<Order> seedOrders() {
-    final now = DateTime.now();
-    return [
-      Order(
-        id: 'APM10061', stopNumber: 1,
-        patient: 'Fatima A.', phone: '+965 9XXX XX42',
-        addr1: 'Salmiya · Block 10', addr2: 'St. 5 · House 22',
-        landmark: 'Behind Sultan Center',
-        customerNote: 'Please do NOT ring the bell — baby sleeping. Knock softly or call when at door.',
-        items: [
-          OrderItem(name: 'Panadol Extra 24×500mg', price: 1.250, qty: 1,
-              color: const Color(0xFFE8646A), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-          OrderItem(name: 'Ventolin Inhaler', price: 2.500, qty: 1,
-              color: const Color(0xFF4299E1), tag: 'Rx', pharmacy: 'Al-Salam Pharmacy'),
-          OrderItem(name: 'Vitamin D 1000IU', price: 0.500, qty: 1,
-              color: const Color(0xFFF6AD55), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-        ],
-        total: 4.250, paid: false, payMethod: PayMethod.cash,
-        discount: 0.500, deliveryFee: 1.500,
-        status: OrderStatus.active, driverState: DriverState.onMyWay,
-        distanceKm: 1.2, etaMin: 6,
-        pinPos: const PinPos(0.60, 0.40),
-        createdAt: now.subtract(const Duration(minutes: 18)),
-      ),
-      Order(
-        id: 'APM10062', stopNumber: 2,
-        patient: 'Mohammed H.', phone: '+965 9XXX XX73',
-        addr1: 'Hawalli · Tunis St', addr2: 'Bldg 14 · Apt 7',
-        landmark: 'Near Tunis Roundabout',
-        items: [
-          OrderItem(name: 'Lipitor 20mg', price: 6.400, qty: 1,
-              color: const Color(0xFF38B2AC), tag: 'Rx', pharmacy: 'Gulf Pharmacy'),
-          OrderItem(name: 'Concor 5mg', price: 5.900, qty: 1,
-              color: const Color(0xFF667EEA), tag: 'Rx', pharmacy: 'Gulf Pharmacy'),
-        ],
-        total: 12.800, paid: true, payMethod: PayMethod.online,
-        status: OrderStatus.next, driverState: DriverState.pickedUp,
-        distanceKm: 3.4, etaMin: 14,
-        pinPos: const PinPos(0.75, 0.28),
-        createdAt: now.subtract(const Duration(minutes: 22)),
-        callRequest: CallRequest(
-          from: 'dispatcher', by: 'Saud Q.',
-          at: now.subtract(const Duration(minutes: 3)),
-          note: 'Patient called — wants to add Vitamin C to the order',
-        ),
-      ),
-      Order(
-        id: 'APM10063', stopNumber: 3,
-        patient: 'Layla M.', phone: '+965 9XXX XX91',
-        addr1: 'Jabriya · Block 4', addr2: 'Eastern Ring Rd',
-        landmark: 'Across from Co-op',
-        items: [
-          OrderItem(name: 'Insulin glargine 100u', price: 4.800, qty: 1,
-              color: const Color(0xFF48BB78), tag: 'Rx', pharmacy: 'Al-Noor Pharmacy'),
-          OrderItem(name: 'Test strips 50ct', price: 2.100, qty: 1,
-              color: const Color(0xFFED8936), tag: 'D2', pharmacy: 'Al-Noor Pharmacy'),
-          OrderItem(name: 'Lancets 100ct', price: 0.700, qty: 1,
-              color: const Color(0xFF9F7AEA), tag: 'OTC', pharmacy: 'Al-Noor Pharmacy'),
-        ],
-        total: 7.600, paid: false, payMethod: PayMethod.knet,
-        status: OrderStatus.later, driverState: DriverState.pending,
-        distanceKm: 5.1, etaMin: 20,
-        pinPos: const PinPos(0.80, 0.55),
-        createdAt: now.subtract(const Duration(minutes: 10)),
-      ),
-      Order(
-        id: 'APM10059', stopNumber: 1,
-        patient: 'Yousef S.', phone: '+965 9XXX XX12',
-        addr1: 'Salwa · Block 6', addr2: 'St. 12 · H 4',
-        items: [
-          OrderItem(name: 'Amoxicillin 500mg', price: 1.500, qty: 2,
-              color: const Color(0xFFE8646A), tag: 'Rx', pharmacy: 'Ibn Sina Pharmacy'),
-        ],
-        total: 3.000, paid: true, payMethod: PayMethod.online,
-        status: OrderStatus.done, driverState: DriverState.delivered,
-        distanceKm: 0, etaMin: 0,
-        pinPos: const PinPos(0.22, 0.18),
-        deliveredAt: now.subtract(const Duration(hours: 1, minutes: 16)),
-        createdAt: now.subtract(const Duration(hours: 2)),
-      ),
-      Order(
-        id: 'APM10080', stopNumber: 6,
-        patient: 'Saif K.', phone: '+965 9XXX XX88',
-        addr1: 'Salwa · Block 7', addr2: 'St. 3 · House 11',
-        landmark: 'Near Salwa Co-op',
-        customerNote: 'Leave the order with the security guard at the gate — I am at work.',
-        multiPharmacy: true,
-        pickups: [
-          PharmacyPickup(
-            phId: 'ph_alsalam', name: 'Al-Salam Pharmacy', addr: 'Salmiya · Block 1',
-            items: ['Panadol Extra 24×500mg', 'Ventolin Inhaler'],
-          ),
-          PharmacyPickup(
-            phId: 'ph_almasarif', name: 'Al-Masaarif Pharmacy', addr: 'Hawalli · Block 5',
-            items: ['Insulin glargine 100u', 'Test strips 50ct'],
-          ),
-          PharmacyPickup(
-            phId: 'ph_alnoor', name: 'Al-Noor Pharmacy', addr: 'Jabriya · Block 3',
-            items: ['Vitamin D 1000IU', 'Calcium 600mg'],
-          ),
-        ],
-        items: [
-          OrderItem(name: 'Panadol Extra 24×500mg', price: 1.250, qty: 1,
-              color: const Color(0xFFE8646A), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-          OrderItem(name: 'Ventolin Inhaler', price: 2.500, qty: 1,
-              color: const Color(0xFF4299E1), tag: 'Rx', pharmacy: 'Al-Salam Pharmacy'),
-          OrderItem(name: 'Insulin glargine 100u', price: 4.800, qty: 2,
-              color: const Color(0xFF48BB78), tag: 'Rx', pharmacy: 'Al-Masaarif Pharmacy'),
-          OrderItem(name: 'Test strips 50ct', price: 2.100, qty: 1,
-              color: const Color(0xFFED8936), tag: 'D2', pharmacy: 'Al-Masaarif Pharmacy'),
-          OrderItem(name: 'Vitamin D 1000IU', price: 0.500, qty: 1,
-              color: const Color(0xFFF6AD55), tag: 'OTC', pharmacy: 'Al-Noor Pharmacy'),
-          OrderItem(name: 'Calcium 600mg', price: 1.100, qty: 1,
-              color: const Color(0xFF9F7AEA), tag: 'OTC', pharmacy: 'Al-Noor Pharmacy'),
-        ],
-        total: 22.500, paid: false, payMethod: PayMethod.cash,
-        status: OrderStatus.later, driverState: DriverState.pending,
-        distanceKm: 9.2, etaMin: 38,
-        pinPos: const PinPos(0.12, 0.85),
-        createdAt: now.subtract(const Duration(minutes: 5)),
-      ),
-      Order(
-        id: 'APM10060', stopNumber: 2,
-        patient: 'Aisha R.', phone: '+965 9XXX XX22',
-        addr1: 'Salmiya · Block 7', addr2: 'St. 1 · H 14',
-        items: [
-          OrderItem(name: 'Multivitamin Adults', price: 4.000, qty: 1,
-              color: const Color(0xFF48BB78), tag: 'OTC', pharmacy: 'Ibn Sina Pharmacy'),
-        ],
-        total: 5.500, paid: false, payMethod: PayMethod.cash,
-        status: OrderStatus.done, driverState: DriverState.delivered,
-        distanceKm: 0, etaMin: 0,
-        pinPos: const PinPos(0.38, 0.28),
-        deliveredAt: now.subtract(const Duration(hours: 0, minutes: 54)),
-        createdAt: now.subtract(const Duration(hours: 1, minutes: 30)),
-      ),
-    ];
+  final _api = ApiClient.instance;
+
+  Future<List<Order>> fetchOrders({String tab = 'active'}) async {
+    final res = await _api.get(ApiConfig.orders, query: {'tab': tab});
+    // CONFIRMED v2: top-level key is "list", not "data"/"orders".
+    final list = (res['list'] ?? res['data'] ?? res['orders'] ?? const []) as List;
+    return list.map((e) => Order.fromJson(e)).toList();
   }
 
-  static Batch seedBatch() {
-    final now = DateTime.now();
-    return Batch(
-      pharmacyName: 'Al-Salam Pharmacy',
-      pharmacyAddr: 'Salmiya · Block 1 · Salem Al-Mubarak St',
-      totalDistance: 6.4,
-      totalEarning: 3.250,
-      orders: [
-        Order(
-          id: 'APM10071', stopNumber: 1,
-          patient: 'Noura A.', phone: '+965 9XXX XX55',
-          addr1: 'Salmiya · Block 10', addr2: 'St. 3 · House 8',
-          items: [
-            OrderItem(name: 'Panadol Extra 24×500mg', price: 1.250, qty: 1,
-                color: const Color(0xFFE8646A), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-            OrderItem(name: 'Vitamin C 1000mg', price: 2.500, qty: 1,
-                color: const Color(0xFFF6AD55), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-          ],
-          total: 4.250, paid: false, payMethod: PayMethod.cash,
-          status: OrderStatus.batchPending, driverState: DriverState.pending,
-          distanceKm: 1.2, etaMin: 6,
-          pinPos: const PinPos(0.55, 0.38),
-          createdAt: now.subtract(const Duration(minutes: 8)),
-        ),
-        Order(
-          id: 'APM10072', stopNumber: 2,
-          patient: 'Bader K.', phone: '+965 9XXX XX66',
-          addr1: 'Salmiya · Block 12', addr2: 'St. 1 · House 22',
-          items: [
-            OrderItem(name: 'Lipitor 20mg', price: 7.600, qty: 1,
-                color: const Color(0xFF38B2AC), tag: 'Rx', pharmacy: 'Al-Salam Pharmacy'),
-          ],
-          total: 9.100, paid: true, payMethod: PayMethod.online,
-          status: OrderStatus.batchPending, driverState: DriverState.pending,
-          distanceKm: 2.1, etaMin: 9,
-          pinPos: const PinPos(0.68, 0.50),
-          createdAt: now.subtract(const Duration(minutes: 8)),
-        ),
-        Order(
-          id: 'APM10073', stopNumber: 3,
-          patient: 'Hessa M.', phone: '+965 9XXX XX77',
-          addr1: 'Jabriya · Block 4', addr2: 'Eastern Ring Rd',
-          items: [
-            OrderItem(name: 'Insulin glargine', price: 9.800, qty: 1,
-                color: const Color(0xFF48BB78), tag: 'Rx', pharmacy: 'Al-Salam Pharmacy'),
-            OrderItem(name: 'Test strips 50ct', price: 4.200, qty: 2,
-                color: const Color(0xFFED8936), tag: 'D2', pharmacy: 'Al-Salam Pharmacy'),
-            OrderItem(name: 'Lancets 100ct', price: 0.700, qty: 2,
-                color: const Color(0xFF9F7AEA), tag: 'OTC', pharmacy: 'Al-Salam Pharmacy'),
-          ],
-          total: 18.500, paid: false, payMethod: PayMethod.knet,
-          status: OrderStatus.batchPending, driverState: DriverState.pending,
-          distanceKm: 3.1, etaMin: 14,
-          pinPos: const PinPos(0.80, 0.62),
-          createdAt: now.subtract(const Duration(minutes: 8)),
-        ),
-      ],
+  Future<Order> fetchOrder(String code) async {
+    final res = await _api.get(ApiConfig.path(ApiConfig.orderByCode, {'code': code}));
+    final data = res['data'] ?? res;
+    return Order.fromJson(data);
+  }
+
+  /// GET /geocode/{co} — resolves an order's address to real coordinates.
+  /// UNCONFIRMED response shape — guessing {"lat": .., "lng": ..}. Use
+  /// this when Order.pinPos is the 0.5/0.5 placeholder (i.e. the /orders
+  /// list response didn't include lat/lng) and you need a real map pin.
+  Future<({double lat, double lng})?> geocodeOrder(String co) async {
+    final res = await _api.get(ApiConfig.path(ApiConfig.geocode, {'co': co}));
+    final data = res['data'] ?? res;
+    final lat = (data['lat'] as num?)?.toDouble();
+    final lng = (data['lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    return (lat: lat, lng: lng);
+  }
+
+  /// GET /home — dashboard summary. Shape unconfirmed; returned raw so the
+  /// HomeScreen/ViewModel can pull whatever fields backend actually sends
+  /// without another round of guessing here.
+  Future<Map<String, dynamic>> fetchHome() => _api.get(ApiConfig.home);
+
+  Future<Map<String, dynamic>> fetchEarnings() => _api.get(ApiConfig.earnings);
+
+  // ── Delivery flow ────────────────────────────────────────────
+  /// CONFIRMED v2 — generic status update, notifies the seller when
+  /// status is 'collecting'. Valid values per backend: 'collecting',
+  /// 'picked_up', 'on_the_way'.
+  Future<void> updateStatus(String co, String status) =>
+      _api.post(ApiConfig.path(ApiConfig.updateStatus, {'co': co}), data: {'status': status});
+
+  Future<void> arrive(String co) =>
+      _api.post(ApiConfig.path(ApiConfig.arrive, {'co': co}));
+
+  /// "Pharmacy pickup (single order)" — for an order that itself spans
+  /// multiple pharmacies (Order.multiPharmacy / PharmacyPickup list).
+  /// [sellerId] is the pharmacy's numeric seller id.
+  Future<void> pickupSeller(String co, String sellerId) => _api.post(
+        ApiConfig.path(ApiConfig.pickupSeller, {'co': co, 'seller': sellerId}),
+      );
+
+  /// POST /orders/{co}/finish — CONFIRMED v3: the example body only shows
+  /// `pod_photo`. Making it required now; method/given/signature are kept
+  /// as OPTIONAL extra fields (harmless if backend ignores them) rather
+  /// than removed outright, since deleting the payment-confirmation flow
+  /// on a single ambiguous example seemed riskier than sending a few
+  /// possibly-unused fields. Confirm with backend whether cash/knet/link
+  /// collection still happens here.
+  /// [signature] is expected to be a base64 PNG string (adjust if backend
+  /// wants a file upload instead — swap for MultipartFile.fromFile).
+  Future<void> finish(
+    String co, {
+    required String podPhotoPath,
+    String? method,
+    String? given,
+    String? signatureBase64,
+  }) async {
+    final form = FormData.fromMap({
+      'pod_photo': await MultipartFile.fromFile(podPhotoPath),
+      if (method != null) 'method': method,
+      if (given != null) 'given': given,
+      if (signatureBase64 != null) 'signature': signatureBase64,
+    });
+    await _api.postMultipart(ApiConfig.path(ApiConfig.finish, {'co': co}), form);
+  }
+
+  /// Maps an Order to the 'cash'|'knet'|'paid' value /finish expects.
+  /// Already-paid orders (online/link, paid==true) send 'paid'; cash/knet
+  /// orders still being collected send their own method.
+  static String methodForOrder(Order o) {
+    if (o.paid) return 'paid';
+    return o.payMethod == PayMethod.knet ? 'knet' : 'cash';
+  }
+
+  /// POST /orders/{co}/fail — CONFIRMED v3 body is just {"reason": "..."}.
+  /// The `reattempt` field from the older guess is gone. [reason] should be
+  /// a stable value, not the driver's currently-selected UI language's
+  /// translated text (see FailedDeliveryScreen — it sends a fixed English
+  /// descriptive string per reason, chosen precisely so language switching
+  /// can never change what the backend receives).
+  Future<void> fail(String co, {required String reason}) =>
+      _api.post(
+        ApiConfig.path(ApiConfig.fail, {'co': co}),
+        data: {'reason': reason},
+      );
+
+  // ── Building photos ────────────────────────────────────────────
+  Future<List<String>> fetchBuildingPhotos(String co) async {
+    final res = await _api.get(ApiConfig.path(ApiConfig.buildingPhotosGet, {'co': co}));
+    final list = (res['data'] ?? res['photos'] ?? const []) as List;
+    return list.map((e) => e.toString()).toList();
+  }
+
+  /// POST /orders/{co}/building-photos — CONFIRMED v3 multipart fields:
+  /// {photo, customer_id} — was wrongly guessed as {file, note} before.
+  /// [customerId] is new — unclear exactly what it should identify (the
+  /// order's customer? unclear if optional) — sending order.id as a
+  /// reasonable default when not provided; verify with backend.
+  Future<void> uploadBuildingPhoto(String co, String filePath, {String? customerId}) async {
+    final form = FormData.fromMap({
+      'photo': await MultipartFile.fromFile(filePath),
+      if (customerId != null) 'customer_id': customerId,
+    });
+    await _api.postMultipart(
+      ApiConfig.path(ApiConfig.buildingPhotosPost, {'co': co}),
+      form,
     );
+  }
+
+  // ── Shift / vehicle / language ────────────────────────────────
+  /// CONFIRMED v3: body key is `on_shift`, NOT `online` like guessed before.
+  Future<void> setShift(bool onShift) =>
+      _api.post(ApiConfig.shift, data: {'on_shift': onShift});
+
+  Future<void> setVehicle({required String vehicleType, required String plateNumber}) =>
+      _api.post(ApiConfig.vehicle, data: {
+        'vehicle_type': vehicleType,
+        'plate_number': plateNumber,
+      });
+
+  Future<void> setLanguage(String language) =>
+      _api.post(ApiConfig.language, data: {'language': language});
+
+  // ── Batch ────────────────────────────────────────────────────
+  /// CONFIRMED v2 top-level shape: {batch, stops, summary, pharmacy_stops}.
+  /// `batch` presumably holds pharmacy/batch metadata, `stops` the order
+  /// list (still guessing they look like Order-shaped entries — field
+  /// names inside `batch`/`stops`/`pharmacy_stops` are NOT confirmed).
+  /// `summary` and `pharmacy_stops` are exposed raw on Batch so UI can use
+  /// them directly without another guessed model.
+  Future<Batch?> fetchPendingBatch() async {
+    final res = await _api.get(ApiConfig.batch);
+    if (res['batch'] == null && res['stops'] == null) return null;
+    return Batch.fromApiResponse(res);
+  }
+
+  /// GET /batch-check — lightweight poll to see if a new batch offer
+  /// exists, without pulling the full payload. Shape unconfirmed.
+  Future<bool> checkForNewBatch() async {
+    final res = await _api.get(ApiConfig.batchCheck);
+    return (res['available'] ?? res['has_batch'] ?? false) == true;
+  }
+
+  Future<void> acceptBatch(String batchId) =>
+      _api.post(ApiConfig.path(ApiConfig.batchAccept, {'batch_id': batchId}));
+
+  Future<void> rejectBatch(String batchId) =>
+      _api.post(ApiConfig.path(ApiConfig.batchReject, {'batch_id': batchId}));
+
+  // ── Multi-stop pickup (within an accepted batch) ─────────────
+  /// Same confirmed shape as /batch: {batch, stops, summary, pharmacy_stops}.
+  Future<Batch?> fetchPickupState() async {
+    final res = await _api.get(ApiConfig.pickup);
+    if (res['batch'] == null && res['stops'] == null) return null;
+    return Batch.fromApiResponse(res);
+  }
+
+  Future<void> startPickup() => _api.post(ApiConfig.pickupStart);
+
+  /// CONFIRMED v3 — REPLACES the v2 guess entirely. `seller` is a NAME
+  /// string (e.g. "Royal Pharmacy"), matching the {co}/pickup/{seller} URL
+  /// param — NOT a numeric seller_id like v2's collection suggested.
+  Future<void> togglePharmacyCollected(String sellerName) =>
+      _api.post(ApiConfig.pickupPharmacy, data: {'seller': sellerName});
+
+  /// CONFIRMED v3 — REPLACES the old "legacy" combined_order_id guess
+  /// entirely. Now takes the pharmacy NAME plus an explicit on/off
+  /// [picked] flag, matching [togglePharmacyCollected]'s seller concept
+  /// rather than being order-based.
+  Future<void> setPickupToggle(String sellerName, bool picked) =>
+      _api.post(ApiConfig.pickupToggle, data: {'seller': sellerName, 'picked': picked});
+
+  // ── Profile (KYC form) ─────────────────────────────────────────
+  /// GET /profile — CONFIRMED shape (seen live): {"profile": {...}}.
+  Future<Map<String, dynamic>> fetchProfile() async {
+    final res = await _api.get(ApiConfig.profileGet);
+    return (res['profile'] ?? res['data'] ?? res) as Map<String, dynamic>;
+  }
+
+  /// POST /profile — CONFIRMED exact field list from the real request body:
+  /// full_name, name_ar, email, phone, civil_id, nationality, blood_group,
+  /// languages_spoken (array), company_name, employee_id,
+  /// driving_experience_years, home_area, home_block, home_street,
+  /// home_building, emergency_name, emergency_phone,
+  /// emergency_relationship, vehicle_type, plate_number, vehicle_make,
+  /// vehicle_model, vehicle_color, bank_name, bank_iban, bank_beneficiary.
+  Future<void> saveProfile(Map<String, dynamic> body) =>
+      _api.post(ApiConfig.profileUpdate, data: body);
+
+  /// POST /profile/document — multipart {slot, file}. CONFIRMED valid
+  /// slot values: doc_civil_id_front | doc_civil_id_back |
+  /// doc_license_front | doc_license_back | doc_vehicle_registration |
+  /// doc_vehicle_insurance.
+  Future<void> uploadProfileDocument(String slot, String filePath) async {
+    final form = FormData.fromMap({
+      'slot': slot,
+      'file': await MultipartFile.fromFile(filePath),
+    });
+    await _api.postMultipart(ApiConfig.profileDocument, form);
   }
 }

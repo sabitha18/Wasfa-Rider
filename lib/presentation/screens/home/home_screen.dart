@@ -3,16 +3,18 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.onTabChange, required this.onOpenOrder, required this.onArrive});
+  const HomeScreen({super.key, required this.onTabChange, required this.onOpenOrder, required this.onArrive, required this.onOpenMap});
   final ValueChanged<String> onTabChange;
   final ValueChanged<String> onOpenOrder;
   final ValueChanged<String> onArrive; // called with order id when swipe fires
+  final ValueChanged<Order> onOpenMap; // opens the in-app map for this order
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -58,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Positioned(
               top: 80, right: 14,
               child: _fab(icon: Icons.sos, color: WTheme.err, iconColor: Colors.white, onTap: () {
-                showWToast(context, '🆘 Emergency dispatched');
+                showWToast(context, context.tr('emergencyDispatched'));
               }),
             ),
             // Tap-pin hint
@@ -76,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const Text('📌', style: TextStyle(fontSize: 12)),
                     const SizedBox(width: 6),
-                    Flexible(child: Text('Tap any pin to make it stop #1',
+                    Flexible(child: Text(context.tr('tapPinHint'),
                         style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.4))),
                   ]),
                 ),
@@ -88,8 +90,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: _ActiveOrderCard(
                   order: active,
                   onOpen: () => widget.onOpenOrder(active.id),
+                  onOpenMap: widget.onOpenMap,
                   onArrive: () {
-                    ordersVM.transitionDriverState(active.id, DriverState.onMyWay);
+                    ordersVM.arriveAtPatient(active.id);
                     final id = active.id;
                     Future.microtask(() => widget.onArrive(id));
                   },
@@ -362,9 +365,11 @@ class _ActiveOrderCard extends StatefulWidget {
     required this.order,
     required this.onOpen,
     required this.onArrive,
+    required this.onOpenMap,
   });
   final Order order;
   final VoidCallback onOpen, onArrive;
+  final ValueChanged<Order> onOpenMap;
 
   @override
   State<_ActiveOrderCard> createState() => _ActiveOrderCardState();
@@ -489,7 +494,7 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
                       ])),
                       Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Text('${order.distanceKm}', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 16, color: WTheme.navy)),
-                        Text('KM', style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                        Text(context.tr('km'), style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
                       ]),
                     ]),
                   ),
@@ -497,11 +502,11 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
                 const SizedBox(height: 12),
                 // Quick actions
                 Row(children: [
-                  Expanded(child: QuickActionBtn(emoji: '🗺', label: 'Maps', color: const Color(0xFF4285F4), onTap: () => _openMaps(order))),
+                  Expanded(child: QuickActionBtn(emoji: '🗺', label: context.tr('maps'), color: const Color(0xFF4285F4), onTap: () => widget.onOpenMap(order))),
                   const SizedBox(width: 8),
-                  Expanded(child: QuickActionBtn(emoji: '🚗', label: 'Waze', color: const Color(0xFF33CCFF), onTap: () => _openWaze(order))),
+                  Expanded(child: QuickActionBtn(emoji: '🚗', label: context.tr('waze'), color: const Color(0xFF33CCFF), onTap: () => _openWaze(order))),
                   const SizedBox(width: 8),
-                  Expanded(child: QuickActionBtn(emoji: '📞', label: 'Call', color: WTheme.ok, onTap: () => _call(order.phone))),
+                  Expanded(child: QuickActionBtn(emoji: '📞', label: context.tr('call'), color: WTheme.ok, onTap: () => _call(order.phone))),
                 ]),
                 const SizedBox(height: 12),
               ]),
@@ -509,16 +514,10 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
           ),
           const SizedBox(height: 14),
           // Swipe control — always visible, whether collapsed or expanded
-          SwipeToConfirm(label: 'Swipe when arrived', color: WTheme.rose, onConfirm: widget.onArrive),
+          SwipeToConfirm(label: context.tr('swipeArrived'), color: WTheme.rose, onConfirm: widget.onArrive),
         ],
       ),
     );
-  }
-
-  void _openMaps(Order o) async {
-    final q = Uri.encodeComponent('${o.addr1}, ${o.addr2}, Kuwait');
-    final url = 'https://www.google.com/maps/search/?api=1&query=$q';
-    if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
   }
 
   void _openWaze(Order o) async {
@@ -547,9 +546,9 @@ class _AllDoneCard extends StatelessWidget {
       child: Column(children: [
         const Text('🎉', style: TextStyle(fontSize: 48)),
         const SizedBox(height: 12),
-        Text('All done!', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 20, color: WTheme.navy)),
+        Text(context.tr('allDone'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 20, color: WTheme.navy)),
         const SizedBox(height: 4),
-        Text('No more active stops. Waiting for new orders…', style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.muted), textAlign: TextAlign.center),
+        Text(context.tr('noMoreStops'), style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.muted), textAlign: TextAlign.center),
       ]),
     );
   }

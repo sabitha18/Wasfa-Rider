@@ -7,6 +7,7 @@ import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key, required this.onTabChange});
@@ -87,9 +88,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 14, offset: const Offset(0, 4))],
               ),
               child: Row(children: [
-                _TabBtn(label: '💰 My Earnings',  active: _tab == 'mine',
+                _TabBtn(label: context.tr('myEarningsTab'),  active: _tab == 'mine',
                     activeColor: WTheme.rose,  onTap: () => setState(() => _tab = 'mine')),
-                _TabBtn(label: '🏦 Company Cash', active: _tab == 'company',
+                _TabBtn(label: context.tr('companyCashTab'), active: _tab == 'company',
                     activeColor: WTheme.navy,  onTap: () => setState(() => _tab = 'company')),
               ]),
             ),
@@ -111,14 +112,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.30), blurRadius: 30, offset: const Offset(0, 12))],
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('MY COMMISSION TODAY', style: GoogleFonts.dmSans(
+                  Text(context.tr('myCommissionToday'), style: GoogleFonts.dmSans(
                       color: Colors.white.withOpacity(0.75), fontSize: 11,
                       fontWeight: FontWeight.w700, letterSpacing: 0.6)),
                   const SizedBox(height: 4),
                   RichText(text: TextSpan(children: [
                     TextSpan(text: earnings.toStringAsFixed(3), style: GoogleFonts.dmSans(
                         color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: -1)),
-                    TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+                    TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                         color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w600)),
                   ])),
                   const SizedBox(height: 8),
@@ -128,7 +129,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       color: const Color(0xFF21B47A).withOpacity(0.25),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text('↑ ${done.length} deliveries', style: GoogleFonts.dmSans(
+                    child: Text(context.tr('deliveriesCountTemplate').replaceFirst('{n}', '${done.length}'), style: GoogleFonts.dmSans(
                         color: const Color(0xFFB7F5CE), fontSize: 11, fontWeight: FontWeight.w700)),
                   ),
                   const SizedBox(height: 12),
@@ -140,10 +141,10 @@ class _EarningsScreenState extends State<EarningsScreen> {
                     ),
                     child: RichText(text: TextSpan(
                       style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.90), fontSize: 11),
-                      children: const [
-                        TextSpan(text: 'Your commission rate (set by admin):\n',
-                            style: TextStyle(fontWeight: FontWeight.w700)),
-                        TextSpan(text: '10% of each order total'),
+                      children: [
+                        TextSpan(text: context.tr('commissionRateLine1'),
+                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                        TextSpan(text: context.tr('commissionRatePercent')),
                       ],
                     )),
                   ),
@@ -160,7 +161,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 14, offset: const Offset(0, 4))],
                 ),
                 child: Row(children: [
-                  for (final e in [('Today', true), ('Week', false), ('Month', false)])
+                  for (final e in [('Today', true), (context.tr('weekLabel'), false), (context.tr('monthLabel'), false)])
                     Expanded(child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 9),
                       decoration: BoxDecoration(
@@ -184,7 +185,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 14, offset: const Offset(0, 4))],
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('HOURLY', style: GoogleFonts.dmSans(
+                  Text(context.tr('hourlyCap'), style: GoogleFonts.dmSans(
                       fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
                   const SizedBox(height: 14),
                   SizedBox(
@@ -232,16 +233,16 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 crossAxisSpacing: 12, mainAxisSpacing: 12,
                 childAspectRatio: 2.4,
                 children: [
-                  _StatBox(v: '${done.length}', k: 'Deliveries'),
-                  _StatBox(v: '$failed', k: 'Failed'),
-                  _StatBox(v: '${totalKm.toStringAsFixed(1)} km', k: 'Distance'),
-                  const _StatBox(v: '⭐ 4.8', k: 'Rating'),
+                  _StatBox(v: '${done.length}', k: context.tr('deliveriesStatLabel')),
+                  _StatBox(v: '$failed', k: context.tr('failedStatLabel')),
+                  _StatBox(v: '${totalKm.toStringAsFixed(1)} km', k: context.tr('distanceStatLabel')),
+                  _StatBox(v: '⭐ 4.8', k: context.tr('ratingStatLabel')),
                 ],
               ),
               const SizedBox(height: 20),
 
               // Work & hours
-              Text('WORK & HOURS', style: GoogleFonts.dmSans(
+              Text(context.tr('workAndHours'), style: GoogleFonts.dmSans(
                   fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
               const SizedBox(height: 10),
               Container(
@@ -264,7 +265,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                     ),
                     const SizedBox(width: 14),
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('SHIFT TIME TODAY', style: GoogleFonts.dmSans(
+                      Text(context.tr('shiftTimeToday'), style: GoogleFonts.dmSans(
                           fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
                       const SizedBox(height: 2),
                       Text('${hh}h ${mm.toString().padLeft(2,'0')}m', style: GoogleFonts.dmSans(
@@ -276,7 +277,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                         color: onShift ? WTheme.ok.withOpacity(0.13) : WTheme.warn.withOpacity(0.13),
                         borderRadius: BorderRadius.circular(999),
                       ),
-                      child: Text(onShift ? '● LIVE' : '◯ PAUSED', style: GoogleFonts.dmSans(
+                      child: Text(onShift ? context.tr('liveStatus') : context.tr('pausedStatus'), style: GoogleFonts.dmSans(
                           fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.4,
                           color: onShift ? WTheme.ok : const Color(0xFFB4730E))),
                     ),
@@ -288,9 +289,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
                     crossAxisSpacing: 8, mainAxisSpacing: 8,
                     childAspectRatio: 1.5,
                     children: [
-                      _StatBox(v: '${elapsedMin - idleMin}m', k: 'Active'),
-                      const _StatBox(v: '38m', k: 'Idle'),
-                      _StatBox(v: earningPerHour.toStringAsFixed(2), k: 'KD / hour'),
+                      _StatBox(v: '${elapsedMin - idleMin}m', k: context.tr('active')),
+                      _StatBox(v: '38m', k: context.tr('idleStatLabel')),
+                      _StatBox(v: earningPerHour.toStringAsFixed(2), k: context.tr('kdPerHourLabel')),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -299,7 +300,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                     decoration: BoxDecoration(
                         color: WTheme.blush, borderRadius: BorderRadius.circular(12)),
                     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      Text('Shift started', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.navy)),
+                      Text(context.tr('shiftStarted'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.navy)),
                       Text(shiftStartStr, style: GoogleFonts.dmSans(
                           fontSize: 11, fontWeight: FontWeight.w800, color: WTheme.navy)),
                     ]),
@@ -345,13 +346,13 @@ class _CompanyCashSection extends StatelessWidget {
           boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.30), blurRadius: 30, offset: const Offset(0, 12))],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('CASH TO HAND OVER', style: GoogleFonts.dmSans(
+          Text(context.tr('cashToHandOver'), style: GoogleFonts.dmSans(
               color: Colors.white.withOpacity(0.75), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6)),
           const SizedBox(height: 4),
           RichText(text: TextSpan(children: [
             TextSpan(text: _companyCash.toStringAsFixed(3), style: GoogleFonts.dmSans(
                 color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: -1)),
-            TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+            TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                 color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w600)),
           ])),
           const SizedBox(height: 10),
@@ -360,7 +361,7 @@ class _CompanyCashSection extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(color: Colors.white.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
             child: Text(
-              '💡 This is the cash you collected from CASH-paid orders.\nHand it over to your manager — they scan the QR — and it clears.',
+              context.tr('cashHandoverExplainer'),
               style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, height: 1.4),
             ),
           ),
@@ -371,7 +372,7 @@ class _CompanyCashSection extends StatelessWidget {
       // ── Action buttons or "all clear" state ──
       if (_companyCash > 0) ...[
         GestureDetector(
-          onTap: () => showWToast(context, '📷 Cash handover QR — show to manager to confirm'),
+          onTap: () => showWToast(context, context.tr('cashHandoverQrToast')),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -380,13 +381,13 @@ class _CompanyCashSection extends StatelessWidget {
               borderRadius: BorderRadius.circular(14),
               boxShadow: [BoxShadow(color: WTheme.ok.withOpacity(0.4), blurRadius: 28, offset: const Offset(0, 12))],
             ),
-            child: Center(child: Text('📷 Show QR to manager & hand over', style: GoogleFonts.dmSans(
+            child: Center(child: Text(context.tr('showQrToManager'), style: GoogleFonts.dmSans(
                 color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
           ),
         ),
         const SizedBox(height: 10),
         GestureDetector(
-          onTap: () => showWToast(context, '🏦 Bank withdraw — attach receipt to continue'),
+          onTap: () => showWToast(context, context.tr('bankWithdrawToast')),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -396,7 +397,7 @@ class _CompanyCashSection extends StatelessWidget {
               border: Border.all(color: WTheme.navy, width: 1.5),
               boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 4))],
             ),
-            child: Center(child: Text('🏦 Withdraw to bank — attach receipt', style: GoogleFonts.dmSans(
+            child: Center(child: Text(context.tr('withdrawToBank'), style: GoogleFonts.dmSans(
                 color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 14))),
           ),
         ),
@@ -409,7 +410,7 @@ class _CompanyCashSection extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: WTheme.ok, width: 1.5),
           ),
-          child: Center(child: Text('✓ All clear — no cash to hand over', style: GoogleFonts.dmSans(
+          child: Center(child: Text(context.tr('allClearNoCash'), style: GoogleFonts.dmSans(
               color: WTheme.ok, fontWeight: FontWeight.w700, fontSize: 13))),
         ),
       ],
@@ -417,7 +418,7 @@ class _CompanyCashSection extends StatelessWidget {
 
       // ── Recent handovers ──
       Align(alignment: Alignment.centerLeft,
-        child: Text('RECENT HANDOVERS', style: GoogleFonts.dmSans(
+        child: Text(context.tr('recentHandovers'), style: GoogleFonts.dmSans(
             fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
       ),
       const SizedBox(height: 8),
@@ -427,7 +428,7 @@ class _CompanyCashSection extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 24),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14)),
-          child: Center(child: Text('No handovers yet. Once you hand over cash, history appears here.',
+          child: Center(child: Text(context.tr('noHandoversYet'),
               textAlign: TextAlign.center,
               style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12))),
         )
@@ -439,7 +440,7 @@ class _CompanyCashSection extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(12)),
           child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text('Total handed over', style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700, color: WTheme.navy)),
+            Text(context.tr('totalHandedOver'), style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700, color: WTheme.navy)),
             Text('${totalEverHanded.toStringAsFixed(3)} KD', style: GoogleFonts.dmSans(
                 fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
           ]),
@@ -489,14 +490,14 @@ class _HandoverCard extends StatelessWidget {
             RichText(text: TextSpan(children: [
               TextSpan(text: handover.amount.toStringAsFixed(3), style: GoogleFonts.dmSans(
                   color: WTheme.navy, fontWeight: FontWeight.w700, fontSize: 13)),
-              TextSpan(text: ' KD', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+              TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
             ])),
             if (handover.isBank) ...[
               const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(999)),
-                child: Text('BANK', style: GoogleFonts.dmSans(fontSize: 9, fontWeight: FontWeight.w800, color: WTheme.navy, letterSpacing: 0.4)),
+                child: Text(context.tr('bankBadge'), style: GoogleFonts.dmSans(fontSize: 9, fontWeight: FontWeight.w800, color: WTheme.navy, letterSpacing: 0.4)),
               ),
             ],
           ]),
@@ -506,7 +507,7 @@ class _HandoverCard extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(color: tagBg, borderRadius: BorderRadius.circular(999)),
-          child: Text(handover.pending ? '⏳ PENDING' : '✓ CONFIRMED', style: GoogleFonts.dmSans(
+          child: Text(handover.pending ? context.tr('pendingBadge') : context.tr('confirmedBadge'), style: GoogleFonts.dmSans(
               fontSize: 10, fontWeight: FontWeight.w800, color: tagFg, letterSpacing: 0.3)),
         ),
       ]),

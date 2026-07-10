@@ -1,14 +1,20 @@
 import 'package:flutter/foundation.dart';
+import '../../core/network/api_client.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/order_repository.dart';
 
 class OrdersViewModel extends ChangeNotifier {
+  final _repo = OrderRepository();
+
   List<Order> _orders = [];
   Batch? _pendingBatch;
   List<String> _batchOrderIds = [];
   Map<String, bool> _batchPickedUp = {};
   String? _batchPharmacyName;
   String? _batchPharmacyAddr;
+
+  bool isLoading = false;
+  String? error;
 
   List<Order> get orders => _orders;
   Batch? get pendingBatch => _pendingBatch;
@@ -19,20 +25,33 @@ class OrdersViewModel extends ChangeNotifier {
 
   Order? get activeOrder => _orders.firstWhereOrNull(
         (o) => o.status == OrderStatus.active,
-  );
+      );
 
   List<Order> get activeOrders => _orders.where((o) =>
       [OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending]
           .contains(o.status)).toList();
 
   List<Order> get doneOrders => _orders.where((o) =>
-  o.status == OrderStatus.done || o.status == OrderStatus.failed).toList();
+      o.status == OrderStatus.done || o.status == OrderStatus.failed).toList();
 
-  void init() {
-    _orders = OrderRepository.seedOrders();
-    _pendingBatch = OrderRepository.seedBatch();
+  /// Call from a FutureBuilder / initState instead of the old sync init().
+  /// Loads active orders + any pending batch offer from the real API.
+  Future<void> load() async {
+    isLoading = true;
+    error = null;
     notifyListeners();
+    try {
+      _orders = await _repo.fetchOrders(tab: 'active');
+      _pendingBatch = await _repo.fetchPendingBatch();
+    } on ApiException catch (e) {
+      error = e.message;
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
   }
+
+  Future<void> refresh() => load();
 
   Order? findById(String id) => _orders.firstWhereOrNull((o) => o.id == id);
 
@@ -44,40 +63,95 @@ class OrdersViewModel extends ChangeNotifier {
     }
   }
 
-  // ── Driver-state machine ──────────────────────────────────────
-  void transitionDriverState(String orderId, DriverState newState) {
+  /// CONFIRMED v2 — generic status update, now backed by a real endpoint.
+  /// Valid [status] values: 'collecting' | 'picked_up' | 'on_the_way'.
+  /// Kept the old name for existing call sites; it's no longer local-only.
+  Future<void> transitionDriverState(String orderId, DriverState newState) async {
     final o = findById(orderId);
     if (o == null) return;
+    final statusStr = _statusStringFor(newState);
+    if (statusStr != null) {
+      final ok = await _guarded(() => _repo.updateStatus(o.co ?? o.id, statusStr));
+      if (!ok) return;
+    }
     _updateOrder(orderId, o.copyWith(driverState: newState));
   }
 
-  void arriveAtPatient(String orderId) {
+  /// Maps a DriverState to the string /orders/{co}/status expects.
+  /// Returns null for states with no matching backend value (delivered/
+  /// failed/pending go through their own dedicated endpoints instead).
+  String? _statusStringFor(DriverState s) {
+    switch (s) {
+      case DriverState.collecting: return 'collecting';
+      case DriverState.pickedUp: return 'picked_up';
+      case DriverState.onMyWay: return 'on_the_way';
+      default: return null;
+    }
+  }
+
+  Future<bool> _guarded(Future<void> Function() action) async {
+    try {
+      await action();
+      return true;
+    } on ApiException catch (e) {
+      error = e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  // ── Driver-state machine — now backed by real endpoints ────────
+  Future<void> arriveAtPatient(String orderId) async {
     final o = findById(orderId);
     if (o == null) return;
+    final ok = await _guarded(() => _repo.arrive(o.co ?? o.id));
+    if (!ok) return;
     _updateOrder(orderId, o.copyWith(
       driverState: DriverState.onMyWay,
       status: OrderStatus.active,
     ));
   }
 
-  void markDelivered(String orderId) {
+  /// [payMethod] MUST be one of the CONFIRMED v2 values 'cash'|'knet'|'paid'
+  /// — use `OrderRepository.methodForOrder(order)` to compute this
+  /// correctly (it is NOT the same as the app's PayMethod enum values).
+  /// [podPhotoPath] is now REQUIRED — CONFIRMED the backend's /finish
+  /// endpoint needs a real proof-of-delivery photo. [payMethod] is still
+  /// sent too (kept optional server-side per the same endpoint's ambiguity
+  /// — see OrderRepository.finish).
+  Future<void> markDelivered(
+    String orderId, {
+    required String podPhotoPath,
+    String? payMethod,
+    String? given,
+    String? signatureBase64,
+  }) async {
     final o = findById(orderId);
     if (o == null) return;
+    final ok = await _guarded(() => _repo.finish(
+          o.co ?? o.id,
+          podPhotoPath: podPhotoPath,
+          method: payMethod,
+          given: given,
+          signatureBase64: signatureBase64,
+        ));
+    if (!ok) return;
     _updateOrder(orderId, o.copyWith(
       status: OrderStatus.done,
       driverState: DriverState.delivered,
       deliveredAt: DateTime.now(),
     ));
-    // Promote next → active
     final next = _orders.firstWhereOrNull((x) => x.status == OrderStatus.next);
     if (next != null) {
       _updateOrder(next.id, next.copyWith(status: OrderStatus.active));
     }
   }
 
-  void markFailed(String orderId, String reason) {
+  Future<void> markFailed(String orderId, String reason) async {
     final o = findById(orderId);
     if (o == null) return;
+    final ok = await _guarded(() => _repo.fail(o.co ?? o.id, reason: reason));
+    if (!ok) return;
     _updateOrder(orderId, o.copyWith(
       status: OrderStatus.failed,
       driverState: DriverState.failed,
@@ -85,8 +159,10 @@ class OrdersViewModel extends ChangeNotifier {
     ));
   }
 
-  // ── Batch handling ────────────────────────────────────────────
-  void acceptBatch(Batch batch) {
+  // ── Batch handling — now backed by real endpoints ──────────────
+  Future<void> acceptBatch(Batch batch, String batchId) async {
+    final ok = await _guarded(() => _repo.acceptBatch(batchId));
+    if (!ok) return;
     _batchOrderIds = batch.orders.map((o) => o.id).toList();
     _batchPickedUp = {};
     _batchPharmacyName = batch.pharmacyName;
@@ -96,18 +172,30 @@ class OrdersViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void rejectBatch() {
+  Future<void> rejectBatch(String batchId) async {
+    final ok = await _guarded(() => _repo.rejectBatch(batchId));
+    if (!ok) return;
     _pendingBatch = null;
     notifyListeners();
   }
 
-  void markBatchOrderPickedUp(String orderId) {
-    _batchPickedUp[orderId] = true;
+  /// CONFIRMED v3 — pickup is genuinely pharmacy-based now, not order-based
+  /// (the old "legacy" combined_order_id toggle is gone entirely). Since
+  /// the current BatchPickupScreen models a batch as ONE pharmacy with
+  /// multiple orders, tapping "Pick" on any order in that batch now calls
+  /// [togglePharmacyCollected] with the batch's pharmacy NAME — marking the
+  /// whole pharmacy (and so, in this single-pharmacy-batch model, the
+  /// whole batch) collected, while still updating just the tapped order's
+  /// local UI state for the per-row checkmark.
+  Future<void> markBatchOrderPickedUp(String orderId) async {
     final o = findById(orderId);
+    if (_batchPharmacyName == null) return;
+    final ok = await _guarded(() => _repo.togglePharmacyCollected(_batchPharmacyName!));
+    if (!ok) return;
+    _batchPickedUp[orderId] = true;
     if (o != null) {
       _updateOrder(orderId, o.copyWith(driverState: DriverState.pickedUp));
     }
-    // If all picked up, activate first in sequence
     final allPicked = _batchOrderIds.every((id) => _batchPickedUp[id] == true);
     if (allPicked) {
       final first = _batchOrderIds.isNotEmpty ? findById(_batchOrderIds.first) : null;
@@ -118,10 +206,18 @@ class OrdersViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Multi-pharmacy ────────────────────────────────────────────
-  void markPharmacyPickedUp(String orderId, String phId) {
+  // ── Multi-pharmacy pickup (single order spanning multiple pharmacies) ──
+  /// CONFIRMED v3 — [phId] must be the pharmacy's NAME string (e.g.
+  /// "Royal Pharmacy"), matching the `seller` concept used everywhere else
+  /// in the pickup endpoints — NOT a numeric id like earlier guesses
+  /// assumed. If `PharmacyPickup.phId` isn't already populated with the
+  /// real pharmacy name from the backend, use `PharmacyPickup.name` when
+  /// calling this instead.
+  Future<void> markPharmacyPickedUp(String orderId, String phId) async {
     final o = findById(orderId);
     if (o == null) return;
+    final ok = await _guarded(() => _repo.pickupSeller(o.co ?? o.id, phId));
+    if (!ok) return;
     final updated = o.pickups.map((p) {
       if (p.phId == phId) return p.copyWith(picked: true);
       return p;
@@ -133,7 +229,12 @@ class OrdersViewModel extends ChangeNotifier {
     ));
   }
 
-  // ── Call requests ─────────────────────────────────────────────
+  // ── Call requests / escalation ──────────────────────────────────
+  // NOTE: no matching endpoints found in the Postman collection for
+  // call-request accept/reject or escalation. These still only mutate
+  // local state — ask backend if/where these should post, or whether
+  // this feature is handled entirely differently server-side (e.g. via
+  // push notifications and no rider-initiated call).
   void acceptCallRequest(String orderId) {
     final o = findById(orderId);
     if (o?.callRequest == null) return;
@@ -165,41 +266,32 @@ class OrdersViewModel extends ChangeNotifier {
     _updateOrder(orderId, o);
   }
 
-  // ── Reorder ───────────────────────────────────────────────────
+  // ── Reorder / switch active ─────────────────────────────────────
+  // NOTE: no reorder endpoint found in the Postman collection either.
+  // These stay local-only for now — ask backend whether stop order is
+  // meant to be persisted server-side or is a rider-app-only concept.
   void reorderActive(List<String> newOrderedIds) {
-    // Update stopNumbers
     for (int i = 0; i < newOrderedIds.length; i++) {
-      final o = findById(newOrderedIds[i]);
-      if (o == null) continue;
-      // We create a fresh copy with new stopNumber via a simple reassignment
       final idx = _orders.indexWhere((x) => x.id == newOrderedIds[i]);
-      if (idx >= 0) {
-        // Minimal copy with updated stopNumber
-        final updated = Order(
-          id: o.id, stopNumber: i + 1, patient: o.patient, phone: o.phone,
-          addr1: o.addr1, addr2: o.addr2, landmark: o.landmark,
-          customerNote: o.customerNote, items: o.items, total: o.total,
-          paid: o.paid, payMethod: o.payMethod, discount: o.discount,
-          deliveryFee: o.deliveryFee, status: o.status,
-          driverState: o.driverState, distanceKm: o.distanceKm,
-          etaMin: o.etaMin, pinPos: o.pinPos, multiPharmacy: o.multiPharmacy,
-          pickups: o.pickups, deliveredAt: o.deliveredAt,
-          failureReason: o.failureReason, callRequest: o.callRequest,
-          callEscalation: o.callEscalation, createdAt: o.createdAt,
-          slaMinutes: o.slaMinutes,
-        );
-        _orders[idx] = updated;
-      }
+      if (idx < 0) continue;
+      final o = _orders[idx];
+      _orders[idx] = Order(
+        id: o.id, co: o.co, stopNumber: i + 1, patient: o.patient, phone: o.phone,
+        addr1: o.addr1, addr2: o.addr2, landmark: o.landmark,
+        customerNote: o.customerNote, items: o.items, total: o.total,
+        paid: o.paid, payMethod: o.payMethod, discount: o.discount,
+        deliveryFee: o.deliveryFee, status: o.status,
+        driverState: o.driverState, distanceKm: o.distanceKm,
+        etaMin: o.etaMin, pinPos: o.pinPos, multiPharmacy: o.multiPharmacy,
+        pickups: o.pickups, deliveredAt: o.deliveredAt,
+        failureReason: o.failureReason, callRequest: o.callRequest,
+        callEscalation: o.callEscalation, createdAt: o.createdAt,
+        slaMinutes: o.slaMinutes,
+      );
     }
     notifyListeners();
   }
 
-  // ── Switch active (tap a pin → that order becomes stop #1) ─────
-  // Mirrors the HTML's onSwitchActive exactly: reorders the active pool
-  // (active/next/later/batchPending) so the tapped order goes first,
-  // then reassigns stopNumber + status (1st=active, 2nd=next, rest=later).
-  // Note: stopNumber is final on Order, so we rebuild each affected order
-  // rather than mutating in place; status alone is mutable and set directly.
   void switchActive(String newActiveId) {
     const activeStatuses = {OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending};
     final activePool = _orders.where((o) => activeStatuses.contains(o.status)).toList();
@@ -214,7 +306,7 @@ class OrdersViewModel extends ChangeNotifier {
       final o = reordered[i];
       final newStatus = i == 0 ? OrderStatus.active : (i == 1 ? OrderStatus.next : OrderStatus.later);
       updatedPool.add(Order(
-        id: o.id, stopNumber: i + 1, patient: o.patient, phone: o.phone,
+        id: o.id, co: o.co, stopNumber: i + 1, patient: o.patient, phone: o.phone,
         addr1: o.addr1, addr2: o.addr2, landmark: o.landmark,
         customerNote: o.customerNote, items: o.items, total: o.total,
         paid: o.paid, payMethod: o.payMethod, discount: o.discount,

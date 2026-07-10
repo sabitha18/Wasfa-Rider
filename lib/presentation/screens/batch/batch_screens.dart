@@ -5,6 +5,7 @@ import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 // ── BATCH PICKUP SCREEN ────────────────────────────────────────
 class BatchPickupScreen extends StatelessWidget {
@@ -51,7 +52,7 @@ class BatchPickupScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              Expanded(child: Text('Batch Pickup', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17))),
+              Expanded(child: Text(context.tr('batchPickupTitle'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17))),
             ]),
             const SizedBox(height: 12),
             Text('🏥 $pharmacyName', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
@@ -67,7 +68,8 @@ class BatchPickupScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            Text('$picked / $total orders collected', style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+            Text(context.tr('ordersCollectedTemplate').replaceFirst('{picked}', '$picked').replaceFirst('{total}', '$total'),
+                style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
           ]),
         ),
         Expanded(
@@ -98,7 +100,7 @@ class BatchPickupScreen extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(o.patient, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 14, color: WTheme.navy)),
-                      Text('${o.items.length} items · ${o.total.toStringAsFixed(3)} KD', style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted)),
+                      Text(context.tr('itemsCountKdTemplate').replaceFirst('{items}', '${o.items.length}').replaceFirst('{total}', o.total.toStringAsFixed(3)), style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted)),
                     ])),
                     if (!done)
                       GestureDetector(
@@ -106,7 +108,7 @@ class BatchPickupScreen extends StatelessWidget {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                           decoration: BoxDecoration(color: WTheme.sky, borderRadius: BorderRadius.circular(10)),
-                          child: Text('Pick', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+                          child: Text(context.tr('pickBtn'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
                         ),
                       )
                     else
@@ -127,7 +129,7 @@ class BatchPickupScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               onPressed: allPicked ? onStart : null,
-              child: Text(allPicked ? 'Start deliveries 🚀' : 'Collect all orders first', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
+              child: Text(allPicked ? context.tr('startDeliveries') : context.tr('collectAllFirst'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
             ),
           ),
         ),
@@ -169,7 +171,7 @@ class MultiPickupScreen extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Multi-Pharmacy Pickup', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
+              Text(context.tr('multiPharmacyPickupTitle'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
               Text(order.patient, style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 12)),
             ])),
           ]),
@@ -178,7 +180,7 @@ class MultiPickupScreen extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              WCard(child: Text('Collect from all ${order.pickups.length} pharmacies before heading to the patient.',
+              WCard(child: Text(context.tr('collectAllPharmaciesIntro').replaceFirst('{n}', '${order.pickups.length}'),
                 style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.muted))),
               ...order.pickups.asMap().entries.map((e) {
                 final idx = e.key;
@@ -204,7 +206,7 @@ class MultiPickupScreen extends StatelessWidget {
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(p.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 14, color: WTheme.navy)),
                         Text(p.addr, style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted)),
-                        Text('${p.items.length} items', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.sky, fontWeight: FontWeight.w600)),
+                        Text(context.tr('itemsCountTemplate').replaceFirst('{n}', '${p.items.length}'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.sky, fontWeight: FontWeight.w600)),
                       ])),
                       Icon(p.picked ? Icons.check_circle : Icons.chevron_right, color: p.picked ? WTheme.ok : WTheme.muted),
                     ]),
@@ -224,7 +226,7 @@ class MultiPickupScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               onPressed: allPicked ? onReadyToDeliver : null,
-              child: Text(allPicked ? 'All picked — Head to patient 🛵' : 'Collect from all pharmacies first',
+              child: Text(allPicked ? context.tr('allPickedHeadToPatient') : context.tr('collectFromAllFirst'),
                 style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
             ),
           ),
@@ -279,7 +281,7 @@ class SinglePharmacyStopScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             children: [
               WCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('ITEMS TO COLLECT', style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
+                Text(context.tr('itemsToCollect'), style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
                 const SizedBox(height: 10),
                 ...pharmacy.items.map((name) => Container(
                   margin: const EdgeInsets.only(bottom: 8),
@@ -303,7 +305,7 @@ class SinglePharmacyStopScreen extends StatelessWidget {
         Padding(
           padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(context).padding.bottom + 16),
           child: SwipeToConfirm(
-            label: 'Confirm pickup from ${pharmacy.name}',
+            label: context.tr('confirmPickupTemplate').replaceFirst('{name}', pharmacy.name),
             color: WTheme.ok,
             onConfirm: onConfirmPickup,
           ),

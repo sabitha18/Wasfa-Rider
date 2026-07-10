@@ -6,6 +6,10 @@ import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 import 'package:wasfa_rider/data/models/models.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:wasfa_rider/core/network/api_client.dart';
+import 'package:wasfa_rider/data/repositories/order_repository.dart';
 
 // ── PROFILE SCREEN (main) ──────────────────────────────────────
 class ProfileScreen extends StatefulWidget {
@@ -23,7 +27,17 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  String _role = 'zone'; // 'express' | 'batch' | 'zone'
+  String _role = 'zone'; // 'batch' | 'zone' — 'express' removed per request
+  // NOTE: there is NO backend endpoint for this at all — confirmed absent
+  // across all three Postman collections provided so far. Previously this
+  // called a guessed POST /role, which would just 404 on every tap and
+  // immediately revert with an error toast — worse than doing nothing.
+  // Local-only for now until backend adds real support; ask them whether
+  // this delivery-mode concept exists server-side before re-adding a call.
+  void _changeRole(String newRole) {
+    if (newRole == _role) return;
+    setState(() => _role = newRole);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -108,9 +122,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('My driver profile', style: GoogleFonts.dmSans(
+                    Text(context.tr('myDriverProfile'), style: GoogleFonts.dmSans(
                         color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
-                    Text('Personal info · documents · vehicle · bank', style: GoogleFonts.dmSans(
+                    Text(context.tr('personalInfoDocsEtc'), style: GoogleFonts.dmSans(
                         color: Colors.white.withOpacity(0.85), fontSize: 11)),
                   ])),
                   Text('›', style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 22, fontWeight: FontWeight.w800)),
@@ -119,7 +133,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
 
             // ── Role selector ─────────────────────────────────
-            Text('DEMO: CHANGE ROLE', style: GoogleFonts.dmSans(
+            Text(context.tr('deliveryMode'), style: GoogleFonts.dmSans(
                 fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted,
                 letterSpacing: 0.5)),
             const SizedBox(height: 8),
@@ -131,9 +145,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 14, offset: const Offset(0, 4))],
               ),
               child: Row(children: [
-                for (final r in [('express', '🏍 Express'), ('batch', '🛵 Batch'), ('zone', '📍 Zone')])
+                for (final r in [('batch', context.tr('roleBatch')), ('zone', context.tr('roleZone'))])
                   Expanded(child: GestureDetector(
-                    onTap: () => setState(() => _role = r.$1),
+                    onTap: () => _changeRole(r.$1),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(vertical: 11),
@@ -167,9 +181,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Order history', style: GoogleFonts.dmSans(
+                    Text(context.tr('orderHistory'), style: GoogleFonts.dmSans(
                         fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 14)),
-                    Text('All completed deliveries', style: GoogleFonts.dmSans(
+                    Text(context.tr('allCompletedDeliveries'), style: GoogleFonts.dmSans(
                         fontSize: 11, color: WTheme.muted)),
                   ])),
                   Text('›', style: TextStyle(color: WTheme.cloud, fontSize: 20, fontWeight: FontWeight.w800)),
@@ -178,7 +192,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
 
             // ── Language ──────────────────────────────────────
-            Text('LANGUAGE', style: GoogleFonts.dmSans(
+            Text(context.tr('languageCap'), style: GoogleFonts.dmSans(
                 fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
             const SizedBox(height: 8),
             Container(
@@ -190,15 +204,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               child: Row(children: [
                 for (final l in [('en', 'English'), ('ar', 'العربية')])
-                  Expanded(child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    decoration: BoxDecoration(
-                      color: l.$1 == 'en' ? WTheme.navy : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
+                  Expanded(child: GestureDetector(
+                    // BUG FIX: this used to always show 'en' as selected
+                    // and do nothing on tap — now reflects the real
+                    // current language and actually calls setLanguage
+                    // (which syncs to POST /language).
+                    onTap: () => appVM.setLanguage(l.$1),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      decoration: BoxDecoration(
+                        color: appVM.language == l.$1 ? WTheme.navy : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(child: Text(l.$2, style: GoogleFonts.dmSans(
+                          fontSize: 13, fontWeight: FontWeight.w700,
+                          color: appVM.language == l.$1 ? Colors.white : WTheme.muted))),
                     ),
-                    child: Center(child: Text(l.$2, style: GoogleFonts.dmSans(
-                        fontSize: 13, fontWeight: FontWeight.w700,
-                        color: l.$1 == 'en' ? Colors.white : WTheme.muted))),
                   )),
               ]),
             ),
@@ -213,7 +235,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   color: WTheme.err, borderRadius: BorderRadius.circular(14),
                   boxShadow: [BoxShadow(color: WTheme.err.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 8))],
                 ),
-                child: Center(child: Text('🚪 Log out', style: GoogleFonts.dmSans(
+                child: Center(child: Text(context.tr('logOut'), style: GoogleFonts.dmSans(
                     color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13))),
               ),
             ),
@@ -226,9 +248,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: RichText(text: TextSpan(
                 style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, height: 1.6),
                 children: [
-                  TextSpan(text: 'WASFA Rider V2 · Interactive prototype\n',
+                  TextSpan(text: '${context.tr('footerAppInfo')}\n',
                       style: TextStyle(color: WTheme.navy, fontWeight: FontWeight.w800)),
-                  const TextSpan(text: 'This is a working spec for the native Android rebuild. Connects to mock data — no backend yet.'),
+                  TextSpan(text: context.tr('footerConnected')),
                 ],
               )),
             ),
@@ -250,20 +272,175 @@ class DriverProfileScreen extends StatefulWidget {
 }
 
 class _DriverProfileScreenState extends State<DriverProfileScreen> {
+  final _repo = OrderRepository();
+  bool _loading = true;
+  bool _saving = false;
+
   final Map<String, String> _data = {
-    'fullName': 'Ahmed Al-Rashidi', 'arabicName': 'أحمد الراشدي',
-    'dob': '', 'employer': 'WASFA Logistics', 'employeeId': 'WL-4821',
+    'fullName': '', 'arabicName': '',
+    'dob': '', 'employer': '', 'employeeId': '',
     'joinedAt': '',
-    'phone': '+965 9XXX 1234', 'whatsapp': '', 'email': 'ahmed@example.com',
-    'civilId': '', 'civilIdExpiry': '', 'nationality': 'Kuwaiti', 'bloodGroup': 'O+',
-    'vehicleType': 'motorbike', 'vehiclePlate': '', 'vehicleMake': 'Honda', 'vehicleYear': '',
-    'bankName': 'NBK', 'bankIban': '',
+    'phone': '', 'whatsapp': '', 'email': '',
+    'civilId': '', 'civilIdExpiry': '', 'nationality': '', 'bloodGroup': '',
+    'vehicleType': 'motorbike', 'vehiclePlate': '', 'vehicleMake': '', 'vehicleYear': '',
+    'bankName': '', 'bankIban': '',
   };
-  final Set<String> _langs = {'Arabic', 'English'};
+  final Set<String> _langs = {};
   final Set<String> _uploadedDocs = {};
   String _photo = '👤';
+  int? _serverCompletion; // CONFIRMED: GET /profile returns a "completion" percentage directly
+
+  // Fields the backend's /profile expects that this screen has no UI for
+  // yet — CONFIRMED to exist via a real GET /profile response. Stored so
+  // save() sends back whatever was already there instead of overwriting
+  // with blanks (that was a real bug before this fix: every save was
+  // silently wiping these to empty strings on the server).
+  final Map<String, String> _passthrough = {
+    'driving_experience_years': '', 'home_area': '', 'home_block': '',
+    'home_street': '', 'home_building': '', 'emergency_name': '',
+    'emergency_phone': '', 'emergency_relationship': '',
+    'vehicle_model': '', 'vehicle_color': '', 'bank_beneficiary': '',
+  };
+
+  // UI label → CONFIRMED backend document `slot` value.
+  static const Map<String, String> _docSlots = {
+    'Civil ID — FRONT': 'doc_civil_id_front',
+    'Civil ID — BACK': 'doc_civil_id_back',
+    'Driving license — FRONT': 'doc_license_front',
+    'Driving license — BACK': 'doc_license_back',
+    'Vehicle registration / license': 'doc_vehicle_registration',
+    'Vehicle insurance': 'doc_vehicle_insurance',
+  };
+
+  static String _docLabelKey(String doc) => switch (doc) {
+    'Civil ID — FRONT' => 'docCivilIdFront',
+    'Civil ID — BACK' => 'docCivilIdBack',
+    'Driving license — FRONT' => 'docLicenseFront',
+    'Driving license — BACK' => 'docLicenseBack',
+    'Vehicle registration / license' => 'docVehicleReg',
+    _ => 'docVehicleInsurance',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final j = await _repo.fetchProfile();
+      if (!mounted) return;
+      setState(() {
+        _data['fullName'] = j['full_name'] ?? '';
+        _data['arabicName'] = j['name_ar'] ?? '';
+        _data['email'] = j['email'] ?? '';
+        _data['phone'] = j['phone'] ?? '';
+        _data['civilId'] = j['civil_id'] ?? '';
+        _data['nationality'] = j['nationality'] ?? '';
+        _data['bloodGroup'] = j['blood_group'] ?? '';
+        _data['employer'] = j['company_name'] ?? '';
+        _data['employeeId'] = j['employee_id'] ?? '';
+        _data['vehicleType'] = j['vehicle_type'] ?? 'motorbike';
+        _data['vehiclePlate'] = j['plate_number'] ?? '';
+        _data['vehicleMake'] = j['vehicle_make'] ?? '';
+        _data['bankName'] = j['bank_name'] ?? '';
+        _data['bankIban'] = j['bank_iban'] ?? '';
+        // UNCONFIRMED whether backend actually returns/accepts these —
+        // not in the Postman example body, kept for forward-compat.
+        _data['dob'] = j['date_of_birth'] ?? '';
+        _data['civilIdExpiry'] = j['civil_id_expiry'] ?? '';
+        _data['joinedAt'] = j['joined_at'] ?? '';
+        _data['whatsapp'] = j['whatsapp'] ?? '';
+        _data['vehicleYear'] = j['vehicle_year'] ?? '';
+        final langs = j['languages_spoken'];
+        if (langs is List) { _langs.clear(); _langs.addAll(langs.map((e) => e.toString())); }
+        // Carry through fields this screen can't edit yet, so save()
+        // doesn't blank them out on the server.
+        for (final key in _passthrough.keys) {
+          _passthrough[key] = (j[key] ?? '').toString();
+        }
+        // CONFIRMED shape: each doc slot is its own top-level key on the
+        // profile object, null when not uploaded (not a separate list).
+        _uploadedDocs.clear();
+        _docSlots.forEach((label, slot) {
+          if (j[slot] != null) _uploadedDocs.add(label);
+        });
+        _serverCompletion = j['completion'] as int?;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false); // fall back to a blank form rather than blocking the screen
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final body = {
+      'full_name': _data['fullName'],
+      'name_ar': _data['arabicName'],
+      'email': _data['email'],
+      'phone': _data['phone'],
+      'civil_id': _data['civilId'],
+      'nationality': _data['nationality'],
+      'blood_group': _data['bloodGroup'],
+      'languages_spoken': _langs.toList(),
+      'company_name': _data['employer'],
+      'employee_id': _data['employeeId'],
+      'vehicle_type': _data['vehicleType'],
+      'plate_number': _data['vehiclePlate'],
+      'vehicle_make': _data['vehicleMake'],
+      'bank_name': _data['bankName'],
+      'bank_iban': _data['bankIban'],
+      // UNCONFIRMED backend key names (not in the Postman example body) —
+      // these were being loaded from GET /profile but never actually sent
+      // back on save, so edits to Date of birth / Civil ID expiry /
+      // Joining date / WhatsApp / Vehicle year were silently dropped.
+      // Sending best-guess keys now; if backend ignores unknown fields
+      // this is harmless, and if it doesn't, edits now actually persist.
+      'date_of_birth': _data['dob'],
+      'civil_id_expiry': _data['civilIdExpiry'],
+      'joined_at': _data['joinedAt'],
+      'whatsapp': _data['whatsapp'],
+      'vehicle_year': _data['vehicleYear'],
+      // Fields this screen doesn't have inputs for yet — send back
+      // whatever was loaded from the server instead of overwriting with
+      // blanks. Add real form fields for these if they need to be editable.
+      ..._passthrough,
+    };
+    try {
+      await _repo.saveProfile(body);
+      if (!mounted) return;
+      showWToast(context, '✅ Profile saved');
+      widget.onBack();
+    } catch (e) {
+      if (!mounted) return;
+      showWToast(context, e is ApiException ? e.message : "Couldn't save — check your connection.");
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _uploadDoc(String label) async {
+    final slot = _docSlots[label];
+    if (slot == null) return;
+    final picker = ImagePicker();
+    final file = await picker.pickImage(source: ImageSource.camera, imageQuality: 85);
+    if (file == null) return;
+    try {
+      await _repo.uploadProfileDocument(slot, file.path);
+      if (!mounted) return;
+      setState(() => _uploadedDocs.add(label));
+      showWToast(context, context.tr('uploadedToast'));
+    } catch (e) {
+      if (!mounted) return;
+      showWToast(context, e is ApiException ? e.message : "Couldn't upload — check your connection.");
+    }
+  }
 
   int get _completion {
+    if (_serverCompletion != null) return _serverCompletion!; // CONFIRMED: backend computes this directly
     final fields = [
       'fullName', 'dob', 'nationality', 'civilId', 'phone', 'employer',
       'vehiclePlate', 'bankIban',
@@ -295,6 +472,9 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(backgroundColor: WTheme.blush, body: Center(child: CircularProgressIndicator()));
+    }
     return Scaffold(
       backgroundColor: WTheme.blush,
       body: Column(children: [
@@ -315,7 +495,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
             const SizedBox(width: 12),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('My driver profile', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
-              Text('$_completion% complete', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+              Text(context.tr('percentComplete').replaceFirst('{n}', '$_completion'), style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
             ]),
           ]),
         ),
@@ -357,7 +537,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                   ]),
                   const SizedBox(width: 14),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_data['fullName']!.isNotEmpty ? _data['fullName']! : 'Add your name', style: GoogleFonts.dmSans(
+                    Text(_data['fullName']!.isNotEmpty ? _data['fullName']! : context.tr('addYourName'), style: GoogleFonts.dmSans(
                         color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18, letterSpacing: -0.3)),
                     const SizedBox(height: 2),
                     Text('${_data['employer']!.isNotEmpty ? _data['employer'] : '—'} · ID ${_data['employeeId']!.isNotEmpty ? _data['employeeId'] : '—'}',
@@ -377,30 +557,30 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                 ),
                 const SizedBox(height: 6),
                 Align(alignment: Alignment.centerLeft,
-                    child: Text('Profile completion · $_completion% — finish all sections to keep working without interruptions',
+                    child: Text(context.tr('profileCompletionTemplate').replaceFirst('{n}', '$_completion'),
                         style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 10, fontWeight: FontWeight.w700))),
               ]),
             ),
 
             // Personal
-            _Section(icon: Icons.person, iconColor: WTheme.navy, title: 'Personal information', children: [
-              _Field(label: 'Full name (English)', value: _data['fullName'] ?? '',
+            _Section(icon: Icons.person, iconColor: WTheme.navy, title: context.tr('personalInfo'), children: [
+              _Field(label: context.tr('fullNameEn'), value: _data['fullName'] ?? '',
                   onChange: (v) => setState(() => _data['fullName'] = v)),
-              _Field(label: 'Full name (Arabic)', value: _data['arabicName'] ?? '',
+              _Field(label: context.tr('fullNameAr'), value: _data['arabicName'] ?? '',
                   onChange: (v) => setState(() => _data['arabicName'] = v)),
-              _DateField(label: 'Date of birth', value: _data['dob'] ?? '', onTap: () => _pickDate('dob')),
-              _Picker(label: 'Nationality', value: _data['nationality'] ?? '',
+              _DateField(label: context.tr('dobLabel'), value: _data['dob'] ?? '', onTap: () => _pickDate('dob')),
+              _Picker(label: context.tr('nationalityLabel'), value: _data['nationality'] ?? '',
                   options: ['Kuwaiti','Egyptian','Indian','Bangladeshi','Pakistani','Filipino','Syrian','Jordanian','Lebanese','Other'],
                   onChange: (v) => setState(() => _data['nationality'] = v)),
-              _Field(label: 'Civil ID number (12 digits)', value: _data['civilId'] ?? '',
+              _Field(label: context.tr('civilIdLabel'), value: _data['civilId'] ?? '',
                   onChange: (v) => setState(() => _data['civilId'] = v),
                   keyboard: TextInputType.number),
-              _DateField(label: 'Civil ID expiry', value: _data['civilIdExpiry'] ?? '', onTap: () => _pickDate('civilIdExpiry')),
-              _Picker(label: 'Blood group', value: _data['bloodGroup'] ?? '',
+              _DateField(label: context.tr('civilIdExpiryLabel'), value: _data['civilIdExpiry'] ?? '', onTap: () => _pickDate('civilIdExpiry')),
+              _Picker(label: context.tr('bloodGroupLabel'), value: _data['bloodGroup'] ?? '',
                   options: ['A+','A-','B+','B-','AB+','AB-','O+','O-','Unknown'],
                   onChange: (v) => setState(() => _data['bloodGroup'] = v)),
               const SizedBox(height: 8),
-              Text('LANGUAGES SPOKEN', style: GoogleFonts.dmSans(
+              Text(context.tr('languagesSpokenHeader'), style: GoogleFonts.dmSans(
                   fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
               const SizedBox(height: 6),
               Wrap(spacing: 6, runSpacing: 6, children: [
@@ -422,77 +602,80 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
             ]),
 
             // Contact
-            _Section(icon: Icons.call, iconColor: WTheme.err, title: 'Contact', children: [
-              _Field(label: 'Primary phone', value: _data['phone'] ?? '',
+            _Section(icon: Icons.call, iconColor: WTheme.err, title: context.tr('contactSection'), children: [
+              _Field(label: context.tr('primaryPhone'), value: _data['phone'] ?? '',
                   onChange: (v) => setState(() => _data['phone'] = v),
                   keyboard: TextInputType.phone),
-              _Field(label: 'WhatsApp number', value: _data['whatsapp'] ?? '',
+              _Field(label: context.tr('whatsappNumber'), value: _data['whatsapp'] ?? '',
                   onChange: (v) => setState(() => _data['whatsapp'] = v),
                   keyboard: TextInputType.phone),
-              _Field(label: 'Email', value: _data['email'] ?? '',
+              _Field(label: context.tr('emailLabel'), value: _data['email'] ?? '',
                   onChange: (v) => setState(() => _data['email'] = v),
                   keyboard: TextInputType.emailAddress),
               Text('HOME ADDRESS', style: GoogleFonts.dmSans(
                   fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
               const SizedBox(height: 6),
-              _Field(label: 'Area', value: '', onChange: (_) {}),
-              _Field(label: 'Block', value: '', onChange: (_) {}),
-              _Field(label: 'Street', value: '', onChange: (_) {}),
-              _Field(label: 'House / building', value: '', onChange: (_) {}),
+              _Field(label: context.tr('areaLabel'), value: '', onChange: (_) {}),
+              _Field(label: context.tr('blockLabel'), value: '', onChange: (_) {}),
+              _Field(label: context.tr('streetLabel'), value: '', onChange: (_) {}),
+              _Field(label: context.tr('houseBuildingLabel'), value: '', onChange: (_) {}),
             ]),
 
             // Emergency
-            _Section(icon: Icons.sos, iconColor: WTheme.rose, title: 'Emergency contact', children: [
-              _Field(label: 'Contact name', value: '', onChange: (_) {}),
-              _Field(label: 'Contact phone', value: '', onChange: (_) {}, keyboard: TextInputType.phone),
-              _Picker(label: 'Relationship', value: '',
+            _Section(icon: Icons.sos, iconColor: WTheme.rose, title: context.tr('emergencyContactSection'), children: [
+              _Field(label: context.tr('contactNameLabel'), value: '', onChange: (_) {}),
+              _Field(label: context.tr('contactPhoneLabel'), value: '', onChange: (_) {}, keyboard: TextInputType.phone),
+              _Picker(label: context.tr('relationshipLabel'), value: '',
                   options: ['Father','Mother','Spouse','Sibling','Friend','Relative','Other'],
                   onChange: (_) {}),
             ]),
 
             // Employment
-            _Section(icon: Icons.business_center, iconColor: WTheme.navy, title: 'Employment', children: [
-              _Field(label: 'Company / employer', value: _data['employer'] ?? '', onChange: (v) => setState(() => _data['employer'] = v)),
-              _Field(label: 'Employee ID', value: _data['employeeId'] ?? '', onChange: (v) => setState(() => _data['employeeId'] = v)),
-              _DateField(label: 'Joining date', value: _data['joinedAt'] ?? '', onTap: () => _pickDate('joinedAt')),
-              _Field(label: 'Years of driving experience', value: '', onChange: (_) {}, keyboard: TextInputType.number),
+            _Section(icon: Icons.business_center, iconColor: WTheme.navy, title: context.tr('employmentSection'), children: [
+              _Field(label: context.tr('companyEmployerLabel'), value: _data['employer'] ?? '', onChange: (v) => setState(() => _data['employer'] = v)),
+              _Field(label: context.tr('employeeIdLabel'), value: _data['employeeId'] ?? '', onChange: (v) => setState(() => _data['employeeId'] = v)),
+              _DateField(label: context.tr('joiningDateLabel'), value: _data['joinedAt'] ?? '', onTap: () => _pickDate('joinedAt')),
+              _Field(label: context.tr('drivingExperienceLabel'), value: '', onChange: (_) {}, keyboard: TextInputType.number),
             ]),
 
             // Vehicle
-            _Section(icon: Icons.two_wheeler, iconColor: WTheme.sky, title: 'Vehicle', children: [
-              _Picker(label: 'Vehicle type', value: _data['vehicleType'] ?? '',
+            _Section(icon: Icons.two_wheeler, iconColor: WTheme.sky, title: context.tr('vehicleSection'), children: [
+              _Picker(label: context.tr('vehicleTypeLabel'), value: _data['vehicleType'] ?? '',
                   options: ['motorbike','scooter','car'],
                   onChange: (v) => setState(() => _data['vehicleType'] = v)),
-              _Field(label: 'Plate number', value: _data['vehiclePlate'] ?? '',
+              _Field(label: context.tr('plateNumberLabel'), value: _data['vehiclePlate'] ?? '',
                   onChange: (v) => setState(() => _data['vehiclePlate'] = v)),
-              _Field(label: 'Make (Honda, Toyota…)', value: _data['vehicleMake'] ?? '', onChange: (v) => setState(() => _data['vehicleMake'] = v)),
-              _Field(label: 'Model', value: '', onChange: (_) {}),
-              _Field(label: 'Year', value: _data['vehicleYear'] ?? '',
+              _Field(label: context.tr('makeLabel'), value: _data['vehicleMake'] ?? '', onChange: (v) => setState(() => _data['vehicleMake'] = v)),
+              _Field(label: context.tr('modelLabel'), value: '', onChange: (_) {}),
+              _Field(label: context.tr('yearLabel'), value: _data['vehicleYear'] ?? '',
                   onChange: (v) => setState(() => _data['vehicleYear'] = v),
                   keyboard: TextInputType.number),
-              _Field(label: 'Color', value: '', onChange: (_) {}),
+              _Field(label: context.tr('colorLabel'), value: '', onChange: (_) {}),
             ]),
 
             // Bank
-            _Section(icon: Icons.account_balance, iconColor: WTheme.ok, title: 'Bank account (for commission payouts)', children: [
-              _Picker(label: 'Bank', value: _data['bankName'] ?? '',
+            _Section(icon: Icons.account_balance, iconColor: WTheme.ok, title: context.tr('bankAccountSection'), children: [
+              _Picker(label: context.tr('bankLabel'), value: _data['bankName'] ?? '',
                   options: ['NBK','KFH','Boubyan','CBK','Gulf Bank','Burgan','Warba','Ahli United','ABK','Other'],
                   onChange: (v) => setState(() => _data['bankName'] = v)),
-              _Field(label: 'IBAN', value: _data['bankIban'] ?? '', onChange: (v) => setState(() => _data['bankIban'] = v)),
-              _Field(label: 'Beneficiary name (as on bank)', value: '', onChange: (_) {}),
+              _Field(label: context.tr('ibanLabel'), value: _data['bankIban'] ?? '', onChange: (v) => setState(() => _data['bankIban'] = v)),
+              _Field(label: context.tr('beneficiaryNameLabel'), value: '', onChange: (_) {}),
             ]),
 
             // Documents
-            _Section(icon: Icons.attach_file, iconColor: WTheme.muted, title: 'Documents — uploads required', children: [
+            _Section(icon: Icons.attach_file, iconColor: WTheme.muted, title: context.tr('documentsSection'), children: [
               for (final doc in [
                 'Civil ID — FRONT', 'Civil ID — BACK',
                 'Driving license — FRONT', 'Driving license — BACK',
                 'Vehicle registration / license', 'Vehicle insurance',
               ])
                 _DocSlot(
-                  label: doc,
+                  // NOTE: `doc` itself stays the stable English identifier
+                  // used for _docSlots/_uploadedDocs/_uploadDoc — only the
+                  // on-screen label is translated, via this lookup.
+                  label: context.tr(_docLabelKey(doc)),
                   uploaded: _uploadedDocs.contains(doc),
-                  onUpload: () => setState(() => _uploadedDocs.add(doc)),
+                  onUpload: () => _uploadDoc(doc),
                 ),
             ]),
           ],
@@ -506,7 +689,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
             boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.15), blurRadius: 24, offset: const Offset(0, -8))],
           ),
           child: GestureDetector(
-            onTap: () { showWToast(context, '✅ Profile saved'); widget.onBack(); },
+            onTap: _saving ? null : _save,
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 16),
@@ -516,8 +699,10 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [BoxShadow(color: WTheme.rose.withOpacity(0.4), blurRadius: 28, offset: const Offset(0, 12))],
               ),
-              child: Center(child: Text('💾 SAVE PROFILE', style: GoogleFonts.dmSans(
-                  color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.4))),
+              child: Center(child: _saving
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
+                  : Text('💾 SAVE PROFILE', style: GoogleFonts.dmSans(
+                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.4))),
             ),
           ),
         ),
@@ -706,7 +891,7 @@ class _DocSlot extends StatelessWidget {
         Text(label, style: GoogleFonts.dmSans(
             fontSize: 11, fontWeight: FontWeight.w800, color: WTheme.navy, letterSpacing: 0.3)),
         const SizedBox(height: 2),
-        Text(uploaded ? 'Uploaded' : 'Tap to take a clear photo', style: GoogleFonts.dmSans(
+        Text(uploaded ? context.tr('uploadedStatus') : context.tr('tapClearPhoto'), style: GoogleFonts.dmSans(
             fontSize: 10, fontWeight: uploaded ? FontWeight.w700 : FontWeight.w600,
             color: uploaded ? WTheme.ok : WTheme.muted)),
       ])),
@@ -720,7 +905,7 @@ class _DocSlot extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
             border: uploaded ? Border.all(color: WTheme.rose, width: 1.5) : null,
           ),
-          child: Text(uploaded ? 'RETAKE' : 'UPLOAD', style: GoogleFonts.dmSans(
+          child: Text(uploaded ? context.tr('retakeBtn') : context.tr('uploadBtn'), style: GoogleFonts.dmSans(
               fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.4,
               color: uploaded ? WTheme.rose : Colors.white)),
         ),
@@ -770,9 +955,9 @@ class HistoryScreen extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Order history', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: Colors.white, fontSize: 18)),
+              Text(context.tr('orderHistory'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: Colors.white, fontSize: 18)),
               const SizedBox(height: 2),
-              Text('${done.length} completed deliveries', style: GoogleFonts.dmSans(
+              Text(context.tr('completedDeliveriesTemplate').replaceFirst('{n}', '${done.length}'), style: GoogleFonts.dmSans(
                   color: Colors.white.withOpacity(0.75), fontSize: 11)),
             ]),
           ]),
@@ -785,9 +970,9 @@ class HistoryScreen extends StatelessWidget {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Text('📋', style: TextStyle(fontSize: 38)),
             const SizedBox(height: 10),
-            Text('No completed orders yet', style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w700)),
+            Text(context.tr('noCompletedOrdersYet'), style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text('Deliveries will show up here.', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12)),
+            Text(context.tr('deliveriesShowHere'), style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12)),
           ]),
         ))
             : ListView.builder(
@@ -821,7 +1006,7 @@ class HistoryScreen extends StatelessWidget {
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                     Expanded(child: Text(o.patient, style: GoogleFonts.dmSans(
                         fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 14))),
-                    Text('${o.total.toStringAsFixed(3)} KD', style: GoogleFonts.dmSans(
+                    Text('${o.total.toStringAsFixed(3)} ${context.tr('kd')}', style: GoogleFonts.dmSans(
                         fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 14)),
                   ]),
                   const SizedBox(height: 2),
@@ -834,8 +1019,8 @@ class HistoryScreen extends StatelessWidget {
                       decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(999)),
                       child: Text(
                         isDone
-                            ? 'Delivered ${o.deliveredAt != null ? _fmtDate(o.deliveredAt!) : 'today'}'
-                            : 'Failed',
+                            ? context.tr('deliveredOnTemplate').replaceFirst('{date}', o.deliveredAt != null ? _fmtDate(o.deliveredAt!) : context.tr('todayLower'))
+                            : context.tr('driverFailed'),
                         style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w700, color: accent),
                       ),
                     ),
@@ -869,12 +1054,12 @@ class _HistoryPayChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Map<String, (Color, Color, String)> styles = {
-      'paid': (WTheme.ok.withOpacity(0.15), WTheme.ok, 'PAID'),
-      'cash': (const Color(0xFFF5A524).withOpacity(0.15), const Color(0xFFB4730E), 'CASH'),
-      'knet': (WTheme.sky.withOpacity(0.12), WTheme.sky, 'KNET'),
-      'link': (WTheme.ok.withOpacity(0.12), WTheme.ok, 'LINK'),
+      'paid': (WTheme.ok.withOpacity(0.15), WTheme.ok, context.tr('paidCap')),
+      'cash': (const Color(0xFFF5A524).withOpacity(0.15), const Color(0xFFB4730E), context.tr('cashBadge')),
+      'knet': (WTheme.sky.withOpacity(0.12), WTheme.sky, context.tr('knetLabel')),
+      'link': (WTheme.ok.withOpacity(0.12), WTheme.ok, context.tr('linkCap')),
     };
-    final (bg, fg, label) = styles[method.name.toLowerCase()] ?? (WTheme.cloud, WTheme.navy, 'CASH');
+    final (bg, fg, label) = styles[method.name.toLowerCase()] ?? (WTheme.cloud, WTheme.navy, context.tr('cashBadge'));
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),

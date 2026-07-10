@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
+import '../../core/constants/app_strings.dart';
 
 // ── Status Pill ────────────────────────────────────────────────
 class StatusPill extends StatelessWidget {
@@ -90,6 +91,9 @@ class PayChip extends StatelessWidget {
 }
 
 // ── Swipe to Confirm ───────────────────────────────────────────
+// Rebuilt so ONLY the thumb responds to drag (the track itself has no
+// gesture handling at all) — a plain tap anywhere on this widget does
+// nothing. Confirm only fires after a real drag covers the threshold.
 class SwipeToConfirm extends StatefulWidget {
   const SwipeToConfirm({super.key, required this.label, required this.color, required this.onConfirm});
   final String label;
@@ -103,6 +107,7 @@ class SwipeToConfirm extends StatefulWidget {
 class _SwipeToConfirmState extends State<SwipeToConfirm> {
   double _dx = 0;
   bool _dragging = false;
+  bool _confirmed = false;
   static const double _thumbW = 64.0;
   static const double _height = 64.0;
 
@@ -112,45 +117,54 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
       final trackW = constraints.maxWidth;
       final maxDx = (trackW - _thumbW).clamp(0.0, double.infinity);
       final progress = maxDx > 0 ? (_dx / maxDx).clamp(0.0, 1.0) : 0.0;
-      return GestureDetector(
-        onHorizontalDragStart: (_) => setState(() => _dragging = true),
-        onHorizontalDragUpdate: (d) {
-          setState(() => _dx = (_dx + d.delta.dx).clamp(0, maxDx));
-        },
-        onHorizontalDragEnd: (_) {
-          setState(() => _dragging = false);
-          if (_dx >= maxDx * 0.85) {
-            setState(() => _dx = maxDx);
-            Future.delayed(const Duration(milliseconds: 300), () {
-              if (mounted) {
-                widget.onConfirm();
-                setState(() => _dx = 0);
-              }
-            });
-          } else {
-            setState(() => _dx = 0);
-          }
-        },
-        child: Container(
-          height: _height,
-          decoration: BoxDecoration(
-            color: widget.color,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: widget.color.withOpacity(0.5), blurRadius: 24, offset: const Offset(0, 10))],
-          ),
-          child: Stack(children: [
-            // Label — centered, fades out as thumb covers it
-            Center(child: Opacity(
-              opacity: (1 - progress).clamp(0.0, 1.0),
-              child: Text(widget.label, style: GoogleFonts.dmSans(
-                fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white,
-              )),
+      return Container(
+        height: _height,
+        decoration: BoxDecoration(
+          color: widget.color,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [BoxShadow(color: widget.color.withOpacity(0.5), blurRadius: 24, offset: const Offset(0, 10))],
+        ),
+        // No GestureDetector here — the track itself is not interactive,
+        // so tapping anywhere that isn't the thumb does nothing at all.
+        child: Stack(children: [
+          // Label — centered, fades out as thumb covers it
+          Center(child: Opacity(
+            opacity: (1 - progress).clamp(0.0, 1.0),
+            child: Text(widget.label, style: GoogleFonts.dmSans(
+              fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white,
             )),
-            // White thumb — starts at left, drags right
-            AnimatedPositioned(
-              duration: _dragging ? Duration.zero : const Duration(milliseconds: 250),
-              left: 6 + _dx,
-              top: 6,
+          )),
+          // White thumb — the ONLY part that responds to drag.
+          AnimatedPositioned(
+            duration: _dragging ? Duration.zero : const Duration(milliseconds: 250),
+            left: 6 + _dx,
+            top: 6,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (_) => setState(() => _dragging = true),
+              onHorizontalDragUpdate: (d) {
+                setState(() => _dx = (_dx + d.delta.dx).clamp(0, maxDx));
+              },
+              onHorizontalDragEnd: (details) {
+                setState(() => _dragging = false);
+                // Require a real drag: past 85% of the track AND a
+                // forward-moving (or already-arrived) gesture — guards
+                // against a stray tap somehow being read as a drag.
+                final reachedThreshold = maxDx > 0 && _dx >= maxDx * 0.85;
+                if (reachedThreshold && !_confirmed) {
+                  _confirmed = true;
+                  setState(() => _dx = maxDx);
+                  Future.delayed(const Duration(milliseconds: 300), () {
+                    if (mounted) {
+                      widget.onConfirm();
+                      setState(() { _dx = 0; _confirmed = false; });
+                    }
+                  });
+                } else {
+                  setState(() => _dx = 0);
+                }
+              },
+              onHorizontalDragCancel: () => setState(() { _dragging = false; _dx = 0; }),
               child: Container(
                 width: _thumbW - 12, height: _height - 12,
                 decoration: BoxDecoration(
@@ -161,8 +175,8 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
                 child: Center(child: Icon(Icons.arrow_forward, color: widget.color, size: 24)),
               ),
             ),
-          ]),
-        ),
+          ),
+        ]),
       );
     });
   }
@@ -185,10 +199,10 @@ class RiderBottomNav extends StatelessWidget {
         child: SizedBox(
           height: 64,
           child: Row(children: [
-            _NavItem(icon: '🏠', label: 'Home',     tab: 'home',     current: current, onTap: onChanged),
-            _NavItem(icon: '📋', label: 'Orders',   tab: 'orders',   current: current, onTap: onChanged),
-            _NavItem(icon: '💰', label: 'Earnings', tab: 'earnings', current: current, onTap: onChanged),
-            _NavItem(icon: '👤', label: 'Profile',  tab: 'profile',  current: current, onTap: onChanged),
+            _NavItem(icon: '🏠', label: context.tr('home'),     tab: 'home',     current: current, onTap: onChanged),
+            _NavItem(icon: '📋', label: context.tr('orders'),   tab: 'orders',   current: current, onTap: onChanged),
+            _NavItem(icon: '💰', label: context.tr('earnings'), tab: 'earnings', current: current, onTap: onChanged),
+            _NavItem(icon: '👤', label: context.tr('profile'),  tab: 'profile',  current: current, onTap: onChanged),
           ]),
         ),
       ),
@@ -238,7 +252,7 @@ class RiderRibbon extends StatelessWidget {
     required this.deliveries,
     required this.onShift,
     required this.onToggleShift,
-    this.role = 'zone', // 'batch' | 'express' | 'zone'
+    this.role = 'zone', // 'batch' | 'zone' — 'express' removed from the UI selector per request; kept as a harmless fallback case below in case it ever slips through
     this.title,
   });
   final double earnings;
@@ -248,10 +262,10 @@ class RiderRibbon extends StatelessWidget {
   final String role;
   final String? title;
 
-  String get _roleLabel => switch (role) {
-    'batch' => '🛵 BATCH',
-    'express' => '🏍 EXPRESS',
-    _ => '📍 ZONE',
+  String _roleLabel(BuildContext context) => switch (role) {
+    'batch' => context.tr('roleBatch'),
+    'express' => context.tr('roleExpress'),
+    _ => context.tr('roleZone'),
   };
 
   @override
@@ -286,7 +300,7 @@ class RiderRibbon extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              Text(onShift ? 'ON SHIFT' : 'OFF SHIFT',
+              Text(onShift ? context.tr('onShift') : context.tr('offShift'),
                   style: GoogleFonts.dmSans(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
             ]),
           ),
@@ -296,16 +310,16 @@ class RiderRibbon extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
             decoration: BoxDecoration(color: WTheme.rose, borderRadius: BorderRadius.circular(999)),
-            child: Text(_roleLabel,
+            child: Text(_roleLabel(context),
                 style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
           ),
         ],
         const Spacer(),
         // Today's earnings
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text('TODAY', style: GoogleFonts.dmSans(
+          Text(context.tr('today'), style: GoogleFonts.dmSans(
               color: Colors.white.withOpacity(0.7), fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-          Text('${earnings.toStringAsFixed(3)} KD', style: GoogleFonts.dmSans(
+          Text('${earnings.toStringAsFixed(3)} ${context.tr('kd')}', style: GoogleFonts.dmSans(
               color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
         ]),
       ]),
@@ -432,8 +446,19 @@ class QuickActionBtn extends StatelessWidget {
 // ── Toast overlay ──────────────────────────────────────────────
 OverlayEntry? _toastEntry;
 void showWToast(BuildContext context, String msg) {
-  _toastEntry?.remove();
-  _toastEntry = OverlayEntry(builder: (_) => Positioned(
+  // Defensive: an in-flight toast's OverlayEntry can already be detached
+  // (e.g. its host route was popped) by the time a new toast tries to
+  // remove it — calling .remove() on that throws an assertion error and
+  // crashes whatever just called showWToast (seen live: crashed profile
+  // save's success path even though the save itself had already worked).
+  try {
+    _toastEntry?.remove();
+  } catch (_) {}
+  _toastEntry = null;
+
+  if (!context.mounted) return; // nothing to show into anymore
+
+  final entry = OverlayEntry(builder: (_) => Positioned(
     bottom: 90,
     left: 0, right: 0,
     child: Center(child: Container(
@@ -445,6 +470,12 @@ void showWToast(BuildContext context, String msg) {
       child: Text(msg, style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
     )),
   ));
-  Overlay.of(context).insert(_toastEntry!);
-  Future.delayed(const Duration(seconds: 2), () => _toastEntry?.remove());
+  _toastEntry = entry;
+  Overlay.of(context).insert(entry);
+  Future.delayed(const Duration(seconds: 2), () {
+    try {
+      entry.remove();
+    } catch (_) {}
+    if (_toastEntry == entry) _toastEntry = null;
+  });
 }

@@ -6,6 +6,7 @@ import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 class OrderDetailScreen extends StatelessWidget {
   const OrderDetailScreen({
@@ -16,16 +17,18 @@ class OrderDetailScreen extends StatelessWidget {
     required this.onCantDeliver,
     required this.onTransitionState,
     required this.onMultiPickup,
+    required this.onOpenMap,
   });
   final String orderId;
   final VoidCallback onBack, onArrive, onCantDeliver, onMultiPickup;
   final void Function(String id, DriverState state) onTransitionState;
+  final ValueChanged<Order> onOpenMap;
 
   @override
   Widget build(BuildContext context) {
     final vm    = context.watch<OrdersViewModel>();
     final order = vm.findById(orderId);
-    if (order == null) return const Scaffold(body: Center(child: Text('Order not found')));
+    if (order == null) return Scaffold(body: Center(child: Text(context.tr('orderNotFound'))));
     final allCount = vm.orders.where((o) => [
       OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending
     ].contains(o.status)).length;
@@ -82,7 +85,7 @@ class OrderDetailScreen extends StatelessWidget {
                         TextSpan(text: order.total.toStringAsFixed(3),
                             style: GoogleFonts.dmSans(color: Colors.white, fontSize: 22,
                                 fontWeight: FontWeight.w800, letterSpacing: -0.5)),
-                        TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+                        TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                             color: Colors.white.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w600)),
                       ])),
                     ]),
@@ -93,7 +96,7 @@ class OrderDetailScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 // Status pills row
                 Wrap(spacing: 6, runSpacing: 6, children: [
-                  _HeroPill(text: '${_driverIcon(order.driverState)} ${_driverLabel(order.driverState)}'),
+                  _HeroPill(text: '${_driverIcon(order.driverState)} ${_driverLabel(context, order.driverState)}'),
                   _HeroPill(
                     text: order.paid ? '✓ PAID' : '${order.payMethod.name.toUpperCase()} · NOT PAID',
                     color: order.paid ? WTheme.ok.withOpacity(0.30) : WTheme.warn.withOpacity(0.30),
@@ -114,7 +117,7 @@ class OrderDetailScreen extends StatelessWidget {
             // Items card
             _ItemsCard(order: order),
             // Customer details card
-            _CustomerCard(order: order),
+            _CustomerCard(order: order, onOpenMap: onOpenMap),
             // Building photos block (before total — matches HTML)
             _BuildingPhotosBlock(order: order),
             // Total to collect card
@@ -200,13 +203,13 @@ class OrderDetailScreen extends StatelessWidget {
     return '${months[d.month-1]} ${d.day}, $h:${d.minute.toString().padLeft(2,'0')} $ampm';
   }
 
-  static String _driverLabel(DriverState s) => switch (s) {
-    DriverState.pending    => 'Pending',
-    DriverState.collecting => 'Collecting',
-    DriverState.pickedUp   => 'Picked up',
-    DriverState.onMyWay    => 'On my way',
-    DriverState.delivered  => 'Delivered',
-    DriverState.failed     => 'Failed',
+  static String _driverLabel(BuildContext context, DriverState s) => switch (s) {
+    DriverState.pending    => context.tr('driverPending'),
+    DriverState.collecting => context.tr('driverCollecting'),
+    DriverState.pickedUp   => context.tr('driverPickedUp'),
+    DriverState.onMyWay    => context.tr('driverOnMyWay'),
+    DriverState.delivered  => context.tr('driverDelivered'),
+    DriverState.failed     => context.tr('driverFailed'),
   };
 
   static String _driverIcon(DriverState s) => switch (s) {
@@ -398,7 +401,7 @@ class _RichItemCardState extends State<_RichItemCard> {
                           TextSpan(text: item.price.toStringAsFixed(3),
                               style: GoogleFonts.dmSans(fontWeight: FontWeight.w800,
                                   color: WTheme.rose, fontSize: 22, letterSpacing: -0.4)),
-                          TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+                          TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                               fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w700)),
                         ])),
                         Container(
@@ -503,7 +506,7 @@ class _RichItemCardState extends State<_RichItemCard> {
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             RichText(text: TextSpan(children: [
               TextSpan(text: item.price.toStringAsFixed(3), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.rose, fontSize: 15)),
-              TextSpan(text: ' KD', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
+              TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
             ])),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -532,8 +535,9 @@ class _RichItemCardState extends State<_RichItemCard> {
 
 // ── Customer details card ──────────────────────────────────────
 class _CustomerCard extends StatelessWidget {
-  const _CustomerCard({required this.order});
+  const _CustomerCard({required this.order, required this.onOpenMap});
   final Order order;
+  final ValueChanged<Order> onOpenMap;
 
   @override
   Widget build(BuildContext context) {
@@ -586,13 +590,13 @@ class _CustomerCard extends StatelessWidget {
           crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 4.5,
           children: [
-            _ContactBtn(label: '📞 Call', bg: WTheme.ok, fg: Colors.white,
+            _ContactBtn(label: '📞 ${context.tr('call')}', bg: WTheme.ok, fg: Colors.white,
                 onTap: () => _launch('tel:${order.phone.replaceAll(RegExp(r'\s'), '')}')),
-            _ContactBtn(label: '💬 WhatsApp', bg: const Color(0xFF25D366), fg: Colors.white,
+            _ContactBtn(label: context.tr('whatsapp'), bg: const Color(0xFF25D366), fg: Colors.white,
                 onTap: () => _launch('https://wa.me/${order.phone.replaceAll(RegExp(r'\D'), '')}')),
-            _ContactBtn(label: '🗺 Google Maps', outline: const Color(0xFF4285F4), fg: const Color(0xFF4285F4),
-                onTap: () => _launch('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent('${order.addr1}, Kuwait')}')),
-            _ContactBtn(label: '🚗 Waze', outline: const Color(0xFF33CCFF), fg: const Color(0xFF33CCFF),
+            _ContactBtn(label: '🗺 ${context.tr('map')}', outline: const Color(0xFF4285F4), fg: const Color(0xFF4285F4),
+                onTap: () => onOpenMap(order)),
+            _ContactBtn(label: '🚗 ${context.tr('waze')}', outline: const Color(0xFF33CCFF), fg: const Color(0xFF33CCFF),
                 onTap: () => _launch('https://waze.com/ul?q=${Uri.encodeComponent('${order.addr1}, Kuwait')}')),
           ],
         ),
@@ -663,23 +667,23 @@ class _TotalCard extends StatelessWidget {
       ),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('💰 TOTAL TO COLLECT', style: GoogleFonts.dmSans(
+          Text(context.tr('totalToCollect'), style: GoogleFonts.dmSans(
               fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
           PayChip(method: order.payMethod, paid: order.paid),
         ]),
         const SizedBox(height: 14),
-        _TotalRow('Sub-total', subtotal),
+        _TotalRow(context.tr('subtotal'), subtotal),
         if (discount > 0)
-          _TotalRow('🎁 Discount', -discount, color: WTheme.ok)
+          _TotalRow(context.tr('discount'), -discount, color: WTheme.ok)
         else
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('🎁 DISCOUNT', style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-              Text('— no discount', style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600)),
+              Text(context.tr('discountCap'), style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+              Text(context.tr('noDiscount'), style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600)),
             ]),
           ),
-        _TotalRow('🛵 Delivery', delivery),
+        _TotalRow(context.tr('deliveryFee'), delivery),
         const SizedBox(height: 8),
         Container(
           width: double.infinity,
@@ -694,14 +698,14 @@ class _TotalCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
-                Text('TOTAL', style: GoogleFonts.dmSans(
+                Text(context.tr('total'), style: GoogleFonts.dmSans(
                     color: order.paid ? WTheme.ok : Colors.white,
                     fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                 RichText(text: TextSpan(children: [
                   TextSpan(text: order.total.toStringAsFixed(3),
                       style: GoogleFonts.dmSans(color: order.paid ? WTheme.ok : Colors.white,
                           fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
-                  TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+                  TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                       color: (order.paid ? WTheme.ok : Colors.white).withOpacity(0.7),
                       fontSize: 13, fontWeight: FontWeight.w600)),
                 ])),
@@ -725,7 +729,7 @@ class _TotalRow extends StatelessWidget {
       Text(label.toUpperCase(), style: GoogleFonts.dmSans(
           fontSize: 12, color: color ?? WTheme.muted,
           fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-      Text('${amount < 0 ? "− " : ""}${amount.abs().toStringAsFixed(3)} KD',
+      Text('${amount < 0 ? "− " : ""}${amount.abs().toStringAsFixed(3)} ${context.tr('kd')}',
           style: GoogleFonts.dmSans(color: color ?? WTheme.navy,
               fontSize: 14, fontWeight: FontWeight.w700)),
     ]),
@@ -745,20 +749,20 @@ class _BigPaymentStatus extends StatelessWidget {
     final List<Color> gradColors;
 
     if (isPaid) {
-      label = '✓ ALREADY PAID'; sub = 'No collection needed — just deliver';
-      methodLabel = 'PAID'; icon = '✓';
+      label = context.tr('alreadyPaidLabel'); sub = context.tr('noCollectionNeeded');
+      methodLabel = context.tr('paidCap'); icon = '✓';
       gradColors = [WTheme.ok, const Color(0xFF1A9C68)];
     } else if (method == PayMethod.knet) {
-      label = '💳 COLLECT BY KNET'; sub = 'Use card terminal at door';
-      methodLabel = 'KNET CARD'; icon = '💳';
+      label = context.tr('collectByKnet'); sub = context.tr('useCardTerminal');
+      methodLabel = context.tr('knetCard'); icon = '💳';
       gradColors = [WTheme.sky, const Color(0xFF1577AC)];
     } else if (method == PayMethod.link) {
-      label = '🔗 PAYMENT LINK SENT'; sub = 'Confirm patient paid before handover';
-      methodLabel = 'LINK'; icon = '🔗';
+      label = context.tr('paymentLinkSent'); sub = context.tr('confirmPatientPaid');
+      methodLabel = context.tr('linkCap'); icon = '🔗';
       gradColors = [WTheme.ok, const Color(0xFF1A9C68)];
     } else {
-      label = '💵 COLLECT CASH'; sub = 'Exact change preferred';
-      methodLabel = 'CASH ON DELIVERY'; icon = '💵';
+      label = context.tr('collectCash'); sub = context.tr('exactChangePreferred');
+      methodLabel = context.tr('cashOnDelivery'); icon = '💵';
       gradColors = [WTheme.warn, const Color(0xFFC7800E)];
     }
 
@@ -775,7 +779,7 @@ class _BigPaymentStatus extends StatelessWidget {
         Positioned(top: -10, right: -10,
             child: Text(icon, style: const TextStyle(fontSize: 90, color: Colors.white10))),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('PAYMENT STATUS', style: GoogleFonts.dmSans(
+          Text(context.tr('paymentStatus'), style: GoogleFonts.dmSans(
               color: Colors.white.withOpacity(0.85), fontSize: 10,
               fontWeight: FontWeight.w800, letterSpacing: 0.8)),
           const SizedBox(height: 6),
@@ -802,7 +806,7 @@ class _BigPaymentStatus extends StatelessWidget {
                   RichText(text: TextSpan(children: [
                     TextSpan(text: order.total.toStringAsFixed(3), style: GoogleFonts.dmSans(
                         color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
-                    TextSpan(text: ' KD', style: GoogleFonts.dmSans(
+                    TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                         color: Colors.white.withOpacity(0.75), fontSize: 12, fontWeight: FontWeight.w700)),
                   ])),
                 ]),
@@ -827,7 +831,7 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
   final List<Map<String, String>> _photos = [];
 
   void _submit() => setState(() {
-    _photos.add({'note': _noteCtrl.text.trim().isEmpty ? 'Building photo' : _noteCtrl.text.trim(), 'by': 'You'});
+    _photos.add({'note': _noteCtrl.text.trim().isEmpty ? context.tr('buildingPhoto') : _noteCtrl.text.trim(), 'by': context.tr('you')});
     _capturing = false;
     _noteCtrl.clear();
   });
@@ -841,14 +845,14 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
         boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 30, offset: const Offset(0, 12))]),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        Text('🏢 BUILDING PHOTOS', style: GoogleFonts.dmSans(
+        Text(context.tr('buildingPhotosHeader'), style: GoogleFonts.dmSans(
             fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
         if (_photos.isNotEmpty) ...[
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: WTheme.ok.withOpacity(0.12), borderRadius: BorderRadius.circular(999)),
-            child: Text('${_photos.length} ON FILE', style: GoogleFonts.dmSans(
+            child: Text('${_photos.length} ${context.tr('onFile')}', style: GoogleFonts.dmSans(
                 color: WTheme.ok, fontSize: 9, fontWeight: FontWeight.w800)),
           ),
         ],
@@ -870,7 +874,7 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
               const SizedBox(height: 4),
               Text(_photos[i]['note']!, maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w700, color: WTheme.navy)),
-              Text('by ${_photos[i]['by']}', style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted)),
+              Text('${context.tr('byPrefix')} ${_photos[i]['by']}', style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted)),
             ]),
           ),
         ))
@@ -881,7 +885,7 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
           decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(10),
               border: Border.all(color: WTheme.cloud)),
           child: Center(child: Text(
-              'No photos yet — be the first to help future drivers find this building.',
+              context.tr('noPhotosYet'),
               style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center)),
         ),
@@ -898,7 +902,7 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
             TextField(controller: _noteCtrl,
                 style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.navy),
                 decoration: InputDecoration(
-                  hintText: "Add a quick note (e.g. 'beige building, blue door')",
+                  hintText: context.tr('addQuickNoteHint'),
                   hintStyle: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted),
                   filled: true, fillColor: Colors.white,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: WTheme.cloud)),
@@ -910,13 +914,13 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
               Expanded(child: GestureDetector(onTap: () => setState(() => _capturing = false),
                   child: Container(padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(10)),
-                      child: Center(child: Text('CANCEL', style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 12)))))),
+                      child: Center(child: Text(context.tr('cancel'), style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 12)))))),
               const SizedBox(width: 8),
               Expanded(flex: 2, child: GestureDetector(onTap: _submit,
                   child: Container(padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(color: WTheme.ok, borderRadius: BorderRadius.circular(10),
                           boxShadow: [BoxShadow(color: WTheme.ok.withOpacity(0.4), blurRadius: 14, offset: const Offset(0, 6))]),
-                      child: Center(child: Text('✓ SAVE & SHARE WITH DRIVERS', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)))))),
+                      child: Center(child: Text(context.tr('saveAndShare'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)))))),
             ]),
           ]),
         )
@@ -968,7 +972,7 @@ class _DriverActionBarState extends State<_DriverActionBar> {
               width: 1.5, style: BorderStyle.solid),
         ),
         child: Center(child: Text(
-          ds == DriverState.failed ? '🚫 Delivery failed' : '✓ Delivered — order complete',
+          ds == DriverState.failed ? context.tr('deliveryFailedMsg') : context.tr('deliveredComplete'),
           style: GoogleFonts.dmSans(
               color: ds == DriverState.failed ? WTheme.err : WTheme.ok,
               fontSize: 13, fontWeight: FontWeight.w700),
@@ -982,32 +986,32 @@ class _DriverActionBarState extends State<_DriverActionBar> {
 
     switch (ds) {
       case DriverState.pending:
-        stepLabel  = 'Step 1 of 4 · Heading to pharmacy';
+        stepLabel  = context.tr('step1Heading');
         swipeLabel = widget.order.multiPharmacy
-            ? "I'm on my way to first pharmacy"
-            : "I'm on my way to pharmacy";
+            ? context.tr('headingToFirstPharmacy')
+            : context.tr('headingToPharmacy');
         swipeColor = WTheme.sky;
         labelColor = const Color(0xFF2A9BBC);
         onConfirm  = () { _transition(DriverState.collecting); };
       case DriverState.collecting:
-        stepLabel  = 'Step 2 of 4 · Collecting from pharmacy';
+        stepLabel  = context.tr('step2Collecting');
         swipeLabel = widget.order.multiPharmacy
-            ? 'Open pickup checklist'
-            : 'Confirm items picked up';
+            ? context.tr('openPickupChecklist')
+            : context.tr('confirmPickedUp');
         swipeColor = WTheme.aqua;
         labelColor = WTheme.aqua;
         onConfirm  = widget.order.multiPharmacy
             ? () => Future.microtask(widget.onMultiPickup)
             : () { _transition(DriverState.pickedUp); };
       case DriverState.pickedUp:
-        stepLabel  = 'Step 3 of 4 · Items in hand — head to patient';
-        swipeLabel = 'Heading to patient (open directions)';
+        stepLabel  = context.tr('step3ItemsInHand');
+        swipeLabel = context.tr('headingToPatient');
         swipeColor = WTheme.rose;
         labelColor = WTheme.rose;
         onConfirm  = () { _transition(DriverState.onMyWay); };
       default: // onMyWay
-        stepLabel  = 'Step 4 of 4 · On the way · Swipe at the door';
-        swipeLabel = "I've arrived at patient";
+        stepLabel  = context.tr('step4OnTheWay');
+        swipeLabel = context.tr('arrivedAtPatient');
         swipeColor = WTheme.aqua;
         labelColor = WTheme.aqua;
         onConfirm  = () => Future.microtask(widget.onArrive);

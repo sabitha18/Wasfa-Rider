@@ -8,6 +8,7 @@ import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
+import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({
@@ -16,11 +17,13 @@ class OrdersScreen extends StatefulWidget {
     required this.onOpenOrder,
     required this.onOpenBatchPickup,
     required this.onCallNow,
+    required this.onOpenMap,
   });
   final ValueChanged<String> onTabChange;
   final ValueChanged<String> onOpenOrder;
   final VoidCallback onOpenBatchPickup;
   final ValueChanged<String> onCallNow;
+  final ValueChanged<Order> onOpenMap;
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -114,6 +117,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             child: _AddressPopup(
               order: _addrOrder!,
               onClose: () => setState(() => _addrOrder = null),
+              onOpenMap: widget.onOpenMap,
             ),
           ),
       ]),
@@ -244,11 +248,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       Clipboard.setData(ClipboardData(text: 'https://wasfa.kw/pay/${o.id}'));
       showWToast(context, '🔗 Payment link copied · ${o.id}');
     },
-    onOpenMap: () async {
-      final q = Uri.encodeComponent('${o.addr1}, ${o.addr2}, Kuwait');
-      final url = 'https://www.google.com/maps/search/?api=1&query=$q';
-      if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
-    },
+    onOpenMap: () => widget.onOpenMap(o),
     onCallCustomer: () async {
       final url = 'tel:${o.phone.replaceAll(RegExp(r'\s'), '')}';
       if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
@@ -261,7 +261,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     child: Column(children: [
       const Text('📋', style: TextStyle(fontSize: 32)),
       const SizedBox(height: 10),
-      Text('No orders here yet',
+      Text(context.tr('noOrdersYet'),
           style: GoogleFonts.dmSans(color: WTheme.muted, fontWeight: FontWeight.w700)),
     ]),
   );
@@ -290,7 +290,7 @@ class _FilterTabs extends StatelessWidget {
     padding: const EdgeInsets.all(4),
     decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(14)),
     child: Row(children: [
-      for (final f in [('active', 'Active'), ('done', 'Done'), ('all', 'All')])
+      for (final f in [('active', context.tr('active')), ('done', context.tr('done')), ('all', context.tr('all'))])
         Expanded(child: GestureDetector(
           onTap: () => onChanged(f.$1),
           child: AnimatedContainer(
@@ -332,11 +332,11 @@ class _DateFilterRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const options = [
-      ('today', 'Today'),
-      ('yesterday', 'Yesterday'),
-      ('week', 'This Week'),
-      ('all', 'All'),
+    final options = [
+      ('today', context.tr('todayFilter')),
+      ('yesterday', context.tr('yesterday')),
+      ('week', context.tr('thisWeek')),
+      ('all', context.tr('all')),
     ];
 
     return SingleChildScrollView(
@@ -530,7 +530,7 @@ class _OrderListCard extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(color: WTheme.aqua,
                               borderRadius: BorderRadius.circular(999)),
-                          child: Text('NEEDS COLLECTION', style: GoogleFonts.dmSans(
+                          child: Text(context.tr('needsCollection'), style: GoogleFonts.dmSans(
                               color: Colors.white, fontSize: 9,
                               fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                         ),
@@ -538,11 +538,11 @@ class _OrderListCard extends StatelessWidget {
                     const SizedBox(height: 12),
                     // Row 4: Action buttons
                     Row(children: [
-                      _ActionBtn(emoji: '🔗', label: 'LINK',  color: WTheme.ok,  onTap: onCopyLink),
+                      _ActionBtn(emoji: '🔗', label: context.tr('link'),  color: WTheme.ok,  onTap: onCopyLink),
                       const SizedBox(width: 6),
-                      _ActionBtn(emoji: '🗺', label: 'MAP',   color: WTheme.sky, onTap: onOpenMap),
+                      _ActionBtn(emoji: '🗺', label: context.tr('map'),   color: WTheme.sky, onTap: onOpenMap),
                       const SizedBox(width: 6),
-                      _ActionBtn(emoji: '📞', label: 'CALL',  color: WTheme.ok,  onTap: onCallCustomer),
+                      _ActionBtn(emoji: '📞', label: context.tr('callCap'),  color: WTheme.ok,  onTap: onCallCustomer),
                     ]),
                     const SizedBox(height: 10),
                     // Row 5: Pay chip + driver state + SLA
@@ -741,9 +741,10 @@ class _BatchGroupHeader extends StatelessWidget {
 
 // ── Address Popup ──────────────────────────────────────────────
 class _AddressPopup extends StatelessWidget {
-  const _AddressPopup({required this.order, required this.onClose});
+  const _AddressPopup({required this.order, required this.onClose, required this.onOpenMap});
   final Order order;
   final VoidCallback onClose;
+  final ValueChanged<Order> onOpenMap;
 
   @override
   Widget build(BuildContext context) {
@@ -780,14 +781,14 @@ class _AddressPopup extends StatelessWidget {
                   ),
                 ]),
                 const SizedBox(height: 14),
-                _AddrRow(label: 'AREA · BLOCK', value: order.addr1,
+                _AddrRow(label: context.tr('areaBlock'), value: order.addr1,
                     color: WTheme.rose, fontSize: 18),
                 const SizedBox(height: 12),
-                _AddrRow(label: 'STREET · HOUSE / APT', value: order.addr2,
+                _AddrRow(label: context.tr('streetHouse'), value: order.addr2,
                     color: WTheme.sky, fontSize: 16),
                 if (order.landmark != null) ...[
                   const SizedBox(height: 12),
-                  _AddrRow(label: 'LANDMARK', value: order.landmark!,
+                  _AddrRow(label: context.tr('landmark'), value: order.landmark!,
                       color: WTheme.aqua, fontSize: 14),
                 ],
                 const SizedBox(height: 12),
@@ -805,10 +806,9 @@ class _AddressPopup extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 GestureDetector(
-                  onTap: () async {
-                    final q = Uri.encodeComponent('${order.addr1}, ${order.addr2}, Kuwait');
-                    final url = 'https://www.google.com/maps/search/?api=1&query=$q';
-                    if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
+                  onTap: () {
+                    onClose(); // close the address popup first
+                    onOpenMap(order);
                   },
                   child: Container(
                     width: double.infinity,
@@ -820,7 +820,7 @@ class _AddressPopup extends StatelessWidget {
                       boxShadow: [BoxShadow(color: WTheme.sky.withOpacity(0.4),
                           blurRadius: 30, offset: const Offset(0, 12))],
                     ),
-                    child: Center(child: Text('🗺 OPEN IN MAPS',
+                    child: Center(child: Text('🗺 ${context.tr('openInMaps')}',
                         style: GoogleFonts.dmSans(color: Colors.white,
                             fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.4))),
                   ),
