@@ -51,7 +51,7 @@ class ApiConfig {
 
   // ── Building photos ──────────────────────────────────────────
   static const String buildingPhotosGet  = '/orders/{co}/building-photos'; // GET
-  static const String buildingPhotosPost = '/orders/{co}/building-photos'; // POST multipart {photo, customer_id} — CONFIRMED v3 (was wrongly guessed as {file, note} before)
+  static const String buildingPhotosPost = '/orders/{co}/building-photos'; // POST multipart {file, customer_id?} — CONFIRMED LIVE 2026-07-14 (the earlier "photo" field name was wrong)
 
   // ── Shift / vehicle / language ────────────────────────────────
   static const String shift    = '/shift';     // POST {on_shift: bool} — CONFIRMED v3 (was wrongly guessed as `online` before)
@@ -72,6 +72,18 @@ class ApiConfig {
   // "Royal Pharmacy"), matching the {co}/pickup/{seller} URL param.
   static const String pickupPharmacy   = '/pickup/pharmacy';  // POST {seller: "Royal Pharmacy"} — marks a pharmacy collected
   static const String pickupToggle     = '/pickup/toggle';    // POST {seller: "Royal Pharmacy", picked: bool} — explicit on/off toggle, no longer "legacy"/order-based
+
+  // ── Cash handover (Company Cash tab) ────────────────────────────
+  // NOT YET BUILT on the backend as of 2026-07-15 — this is prep so the
+  // client is ready to wire up the moment these exist. Every path/shape
+  // below is a best guess following this app's existing naming
+  // conventions, not a confirmed contract. Expect to adjust field names
+  // once these are actually hit for the first time (same pattern as
+  // every other "unconfirmed shape" endpoint in this file).
+  static const String cashBalance        = '/driver/cash-balance';             // GET -> {amount}
+  static const String cashHandovers      = '/driver/cash-handovers';           // GET -> {data: [{amount, method, date, confirmed_by, status}]}
+  static const String cashHandoverStart  = '/driver/cash-handover/start';      // POST -> {handover_id, token or qr_url, code, amount, expires_at}
+  static const String cashHandoverStatus = '/driver/cash-handover/{id}/status';// GET -> {status: pending|confirmed|expired}
 
   // ── Path helpers ──────────────────────────────────────────────
   static String path(String template, Map<String, String> params) {

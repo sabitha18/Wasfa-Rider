@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "973190005434",
+    "project_id": "wasfa-rider",
+    "storage_bucket": "wasfa-rider.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:973190005434:android:09a6db563214c3a729f883",
+        "android_client_info": {
+          "package_name": "kw.wasfa.rider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyARFpyAvqbEowx_ay7DZAFpXxeTJdxWBtE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:973190005434:android:ab59958b9948383629f883",
+        "android_client_info": {
+          "package_name": "kw.wasfa.wasfa_rider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyARFpyAvqbEowx_ay7DZAFpXxeTJdxWBtE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

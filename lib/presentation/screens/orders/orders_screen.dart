@@ -194,45 +194,53 @@ class _OrdersScreenState extends State<OrdersScreen> {
   // ── Reorderable list (active tab with multiple cards) ─────────
   Widget _buildReorderableList(List<Order> filtered, OrdersViewModel vm, List<Order> orders) {
     final headers = _headers(orders, vm);
-    return ReorderableListView(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      buildDefaultDragHandles: false,
-      onReorder: (oldIdx, newIdx) {
-        final hLen = headers.length;
-        final from = oldIdx - hLen;
-        var to = newIdx - hLen;
-        if (from < 0 || from >= filtered.length) return;
-        if (to > from) to -= 1;
-        to = to.clamp(0, filtered.length - 1);
-        final ids = filtered.map((o) => o.id).toList();
-        ids.insert(to, ids.removeAt(from));
-        vm.reorderActive(ids);
-        showWToast(context, '🔢 Order sequence updated — next stop is now #1');
-      },
-      children: [
-        for (int i = 0; i < headers.length; i++)
-          _NonDraggableItem(key: ValueKey('h$i'), child: headers[i]),
-        ...filtered.asMap().entries.map((e) {
-          final idx = e.key + headers.length;
-          final o   = e.value;
-          // Pass dragIndex so the card renders the ≡ handle inside itself
-          return _buildCardWidget(o, vm, dragIndex: idx);
-        }),
-        if (filtered.isEmpty)
-          _NonDraggableItem(key: const ValueKey('empty'), child: _emptyState()),
-      ],
+    return RefreshIndicator(
+      color: WTheme.rose,
+      onRefresh: vm.refresh,
+      child: ReorderableListView(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        buildDefaultDragHandles: false,
+        onReorder: (oldIdx, newIdx) {
+          final hLen = headers.length;
+          final from = oldIdx - hLen;
+          var to = newIdx - hLen;
+          if (from < 0 || from >= filtered.length) return;
+          if (to > from) to -= 1;
+          to = to.clamp(0, filtered.length - 1);
+          final ids = filtered.map((o) => o.id).toList();
+          ids.insert(to, ids.removeAt(from));
+          vm.reorderActive(ids);
+          showWToast(context, '🔢 Order sequence updated — next stop is now #1');
+        },
+        children: [
+          for (int i = 0; i < headers.length; i++)
+            _NonDraggableItem(key: ValueKey('h$i'), child: headers[i]),
+          ...filtered.asMap().entries.map((e) {
+            final idx = e.key + headers.length;
+            final o   = e.value;
+            // Pass dragIndex so the card renders the ≡ handle inside itself
+            return _buildCardWidget(o, vm, dragIndex: idx);
+          }),
+          if (filtered.isEmpty)
+            _NonDraggableItem(key: const ValueKey('empty'), child: _emptyState()),
+        ],
+      ),
     );
   }
 
   // ── Normal scroll list (done/all tab) ─────────────────────────
   Widget _buildNormalList(List<Order> filtered, OrdersViewModel vm, List<Order> orders) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      children: [
-        ..._headers(orders, vm),
-        ...filtered.map((o) => _buildCardWidget(o, vm)),
-        if (filtered.isEmpty) _emptyState(),
-      ],
+    return RefreshIndicator(
+      color: WTheme.rose,
+      onRefresh: vm.refresh,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        children: [
+          ..._headers(orders, vm),
+          ...filtered.map((o) => _buildCardWidget(o, vm)),
+          if (filtered.isEmpty) _emptyState(),
+        ],
+      ),
     );
   }
 
@@ -245,8 +253,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
     onCallNow: o.hasPendingCallRequest ? () => widget.onCallNow(o.id) : null,
     onCancelEscalation: o.hasPendingEscalation ? () => vm.cancelEscalation(o.id) : null,
     onCopyLink: () {
-      Clipboard.setData(ClipboardData(text: 'https://wasfa.kw/pay/${o.id}'));
-      showWToast(context, '🔗 Payment link copied · ${o.id}');
+      // TEMPORARILY DISABLED — this used to copy a fabricated URL
+      // (https://wasfa.kw/pay/{id}) that was never confirmed with backend
+      // and almost certainly doesn't point to a real payment page. Better
+      // to tell the driver it's not ready than hand them a broken link to
+      // send a real customer. Restore the real link here once backend
+      // confirms the actual format/endpoint.
+      showWToast(context, "Payment link isn't ready yet — check back soon");
     },
     onOpenMap: () => widget.onOpenMap(o),
     onCallCustomer: () async {

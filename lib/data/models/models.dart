@@ -14,6 +14,11 @@ class OrderItem {
   final Color color;
   final String tag;        // e.g. 'OTC', 'Rx', 'D2'
   final String? pharmacy;  // seller pharmacy name
+  // NOT CONFIRMED — backend's item shape has no image field at all yet
+  // (see fromJson comment below). Parsed defensively against a few likely
+  // key names so this starts working the moment backend adds one, without
+  // needing another round of client changes.
+  final String? imageUrl;
 
   const OrderItem({
     required this.name,
@@ -22,26 +27,30 @@ class OrderItem {
     this.color = const Color(0xFFE8646A),
     this.tag = 'Rx',
     this.pharmacy,
+    this.imageUrl,
   });
 
   // CONFIRMED shape (seen live): {name, quantity, price, tag, pharmacy}
-  // Note the key is "quantity", not "qty".
+  // Note the key is "quantity", not "qty". No image field currently exists
+  // in this response — imageUrl below is a forward-compatible guess at
+  // possible key names, not a confirmed one.
   factory OrderItem.fromJson(Map<String, dynamic> j) => OrderItem(
-        name: j['name'] ?? '',
-        price: (j['price'] ?? 0).toDouble(),
-        qty: j['quantity'] ?? j['qty'] ?? 1,
-        tag: j['tag'] ?? 'Rx',
-        pharmacy: j['pharmacy'],
-        color: _colorForTag(j['tag']),
-      );
+    name: j['name'] ?? '',
+    price: (j['price'] ?? 0).toDouble(),
+    qty: j['quantity'] ?? j['qty'] ?? 1,
+    tag: j['tag'] ?? 'Rx',
+    pharmacy: j['pharmacy'],
+    color: _colorForTag(j['tag']),
+    imageUrl: j['image_url'] ?? j['image'] ?? j['photo_url'] ?? j['photo'],
+  );
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'price': price,
-        'quantity': qty,
-        'tag': tag,
-        'pharmacy': pharmacy,
-      };
+    'name': name,
+    'price': price,
+    'quantity': qty,
+    'tag': tag,
+    'pharmacy': pharmacy,
+  };
 
   static Color _colorForTag(String? tag) {
     switch (tag) {
@@ -53,6 +62,71 @@ class OrderItem {
 }
 
 // ── Pharmacy Pickup (multi-pharmacy orders) ────────────────────
+// ── Building photo (per-address photo shared between drivers) ──
+class BuildingPhoto {
+  final String url;
+  final String? note;
+  final String? by;
+  const BuildingPhoto({required this.url, this.note, this.by});
+
+  factory BuildingPhoto.fromJson(Map<String, dynamic> j) => BuildingPhoto(
+    url: (j['url'] ?? '').toString(),
+    note: j['note'],
+    by: j['by'],
+  );
+}
+
+// ── Cash handover (Company Cash tab) — backend not built yet ────
+// Shapes below are best guesses matching this app's naming conventions;
+// treat as unconfirmed until actually hit against a real response.
+class CashHandoverSession {
+  final String id;
+  final String qrData; // full URL or token — whatever should be encoded in the QR
+  final String code;   // 6-digit manual-entry code
+  final double amount;
+  final DateTime? expiresAt;
+
+  const CashHandoverSession({
+    required this.id,
+    required this.qrData,
+    required this.code,
+    required this.amount,
+    this.expiresAt,
+  });
+
+  factory CashHandoverSession.fromJson(Map<String, dynamic> j) => CashHandoverSession(
+    id: (j['handover_id'] ?? j['id'] ?? '').toString(),
+    qrData: (j['qr_url'] ?? j['url'] ?? j['token'] ?? '').toString(),
+    code: (j['code'] ?? '').toString(),
+    amount: (j['amount'] ?? 0).toDouble(),
+    expiresAt: j['expires_at'] != null ? DateTime.tryParse(j['expires_at']) : null,
+  );
+}
+
+class CashHandoverRecord {
+  final double amount;
+  final bool isBank;
+  final String dateLabel;
+  final String? confirmedBy;
+  final bool pending;
+
+  const CashHandoverRecord({
+    required this.amount,
+    required this.isBank,
+    required this.dateLabel,
+    this.confirmedBy,
+    this.pending = false,
+  });
+
+  factory CashHandoverRecord.fromJson(Map<String, dynamic> j) => CashHandoverRecord(
+    amount: (j['amount'] ?? 0).toDouble(),
+    isBank: (j['method'] ?? '') == 'bank',
+    dateLabel: (j['date'] ?? j['created_at'] ?? '').toString(),
+    confirmedBy: j['confirmed_by'],
+    pending: (j['status'] ?? '') == 'pending',
+  );
+}
+
 class PharmacyPickup {
   final String phId;
   final String name;
@@ -78,16 +152,16 @@ class PharmacyPickup {
       );
 
   factory PharmacyPickup.fromJson(Map<String, dynamic> j) => PharmacyPickup(
-        phId: j['phId'] ?? j['id'] ?? '',
-        name: j['name'] ?? '',
-        addr: j['addr'] ?? j['address'] ?? '',
-        items: List<String>.from(j['items'] ?? const []),
-        picked: j['picked'] ?? false,
-      );
+    phId: j['phId'] ?? j['id'] ?? '',
+    name: j['name'] ?? '',
+    addr: j['addr'] ?? j['address'] ?? '',
+    items: List<String>.from(j['items'] ?? const []),
+    picked: j['picked'] ?? false,
+  );
 
   Map<String, dynamic> toJson() => {
-        'phId': phId, 'name': name, 'addr': addr, 'items': items, 'picked': picked,
-      };
+    'phId': phId, 'name': name, 'addr': addr, 'items': items, 'picked': picked,
+  };
 }
 
 // ── Call / Escalation request ──────────────────────────────────
@@ -126,9 +200,9 @@ class PinPos {
 class Order {
   final String id; // the human-readable `code`, e.g. "APM10061" — used for display + GET /orders/{code}
   final String? co; // CONFIRMED to be a DIFFERENT, numeric internal id (Postman example: code="APM5" vs co="6")
-                     // used by arrive/pickup/finish/fail/status/building-photos/geocode.
-                     // Field name inside the real order JSON for this is still UNCONFIRMED —
-                     // guessing `id` below since `code` already claims that name in our own model.
+  // used by arrive/pickup/finish/fail/status/building-photos/geocode.
+  // Field name inside the real order JSON for this is still UNCONFIRMED —
+  // guessing `id` below since `code` already claims that name in our own model.
   final int stopNumber;
   final String patient;
   final String phone;
@@ -253,6 +327,13 @@ class Order {
   factory Order.fromJson(Map<String, dynamic> j) {
     final itemsJson = (j['items'] as List?) ?? const [];
     final pickupsJson = (j['pickups'] as List?) ?? const []; // not present in the confirmed /orders response — likely only on order-detail or multi-pharmacy orders
+    // TEMP trace — tracing a report of orders showing "paid" in the UI
+    // despite backend sending paid:false for that order. Remove once
+    // confirmed/fixed. Prints the RAW value exactly as received, before
+    // any parsing, so we can see whether the app itself ever actually
+    // gets paid:false for the affected order, or something upstream of
+    // this constructor already has it wrong.
+    debugPrint('[Order.fromJson] id=${j['id'] ?? j['code']} raw j["paid"]=${j['paid']} (type: ${j['paid'].runtimeType})');
     return Order(
       id: (j['id'] ?? j['code'] ?? '').toString(),
       co: (j['co_id'] ?? j['co'] ?? j['combined_order_id'])?.toString(),
@@ -340,6 +421,7 @@ class DriverProfile {
   double rating;
   bool needsVehicle; // CONFIRMED field from /me — true means force the vehicle-setup screen
   String? language; // CONFIRMED field from /me — the driver's saved language ('en'/'ar')
+  DateTime? shiftStartedAt; // CONFIRMED field from /me — was never parsed before despite being in the response
 
   DriverProfile({
     this.id,
@@ -355,6 +437,7 @@ class DriverProfile {
     this.rating = 4.9,
     this.needsVehicle = false,
     this.language,
+    this.shiftStartedAt,
   });
 
   // CONFIRMED shape (seen live): {"id", "name", "phone", "vehicle_type",
@@ -374,6 +457,10 @@ class DriverProfile {
       plateNumber: j['plate_number'] ?? '',
       needsVehicle: j['needs_vehicle'] == true,
       language: j['language'],
+      // Was confirmed present in this response but never actually parsed —
+      // the Earnings screen's "Work & Hours" section used a hardcoded
+      // fake offset (now.subtract(4h22m)) instead of this real value.
+      shiftStartedAt: j['shift_started_at'] != null ? DateTime.tryParse(j['shift_started_at']) : null,
       // Not present in /me — left at defaults until GET /earnings is wired
       // into the profile refresh, or confirmed to live elsewhere.
       todayEarnings: 0.0,
@@ -437,7 +524,9 @@ class Batch {
       pharmacyAddr: batchJson['pharmacy_addr'] ?? batchJson['pharmacyAddr'] ?? '',
       totalDistance: (batchJson['total_distance'] ?? 0).toDouble(),
       totalEarning: (batchJson['total_earning'] ?? 0).toDouble(),
-      orders: stopsJson.map((e) => Order.fromJson(e)).toList(),
+      // Same defensive filter as fetchOrders — skip any stop with no
+      // usable id.
+      orders: stopsJson.map((e) => Order.fromJson(e)).where((o) => o.id.isNotEmpty).toList(),
       rawSummary: res['summary'] as Map<String, dynamic>?,
       rawPharmacyStops: (res['pharmacy_stops'] as List?)?.cast<Map<String, dynamic>>(),
     );

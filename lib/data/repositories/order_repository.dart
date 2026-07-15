@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_config.dart';
 import '../models/models.dart';
@@ -17,13 +18,33 @@ class OrderRepository {
     final res = await _api.get(ApiConfig.orders, query: {'tab': tab});
     // CONFIRMED v2: top-level key is "list", not "data"/"orders".
     final list = (res['list'] ?? res['data'] ?? res['orders'] ?? const []) as List;
-    return list.map((e) => Order.fromJson(e)).toList();
+    // Defensive: skip any entry with no usable id at all (seen live — an
+    // order with blank id AND null co, causing wasted geocode calls
+    // ("[HomeMap] geocode FAILED for order  (co=null)") and very likely
+    // the intermittent "Order not found" screen too, since a garbage
+    // entry like this can appear/disappear between list refreshes.
+    return list.map((e) => Order.fromJson(e)).where((o) => o.id.isNotEmpty).toList();
   }
 
+  /// CONFIRMED LIVE shape (2026-07-14): {"order": {...fields...}, "items":
+  /// [...], "event": ..., "pharmacies": [...]} — fields live under "order",
+  /// NOT under "data" and NOT flat at the top level like the list endpoint.
+  /// The previous `res['data'] ?? res` unwrapping was wrong: since there's
+  /// no "data" key, it silently fell back to the WHOLE raw response, so
+  /// every field read as null and produced an Order with a blank id. That
+  /// blank-id order then got written back into the in-memory list at
+  /// APM74's position (refreshOrder replaces by array position, not by
+  /// matching id), corrupting a previously-good entry — which is what
+  /// actually caused the intermittent "Order not found" bug, plus the
+  /// "geocode FAILED for order  (co=null)" spam. One root cause, several
+  /// symptoms.
   Future<Order> fetchOrder(String code) async {
     final res = await _api.get(ApiConfig.path(ApiConfig.orderByCode, {'code': code}));
-    final data = res['data'] ?? res;
-    return Order.fromJson(data);
+    final orderJson = Map<String, dynamic>.from((res['order'] as Map?) ?? res['data'] ?? res);
+    // "items" is a sibling key here, not nested inside "order" — merge it
+    // in so Order.fromJson (which looks for j['items']) actually finds it.
+    if (res['items'] != null) orderJson['items'] = res['items'];
+    return Order.fromJson(orderJson);
   }
 
   /// GET /geocode/{co} — resolves an order's address to real coordinates.
@@ -44,7 +65,13 @@ class OrderRepository {
   /// without another round of guessing here.
   Future<Map<String, dynamic>> fetchHome() => _api.get(ApiConfig.home);
 
-  Future<Map<String, dynamic>> fetchEarnings() => _api.get(ApiConfig.earnings);
+  /// Shape unconfirmed for the `period` breakdown specifically — this
+  /// endpoint existed but was never actually called anywhere in the app
+  /// before now (the Week/Month tabs had no tap handler at all). Returned
+  /// raw so the screen can defensively pull out whatever fields actually
+  /// come back rather than guessing a strict model up front.
+  Future<Map<String, dynamic>> fetchEarnings({String period = 'today'}) =>
+      _api.get(ApiConfig.earnings, query: {'period': period});
 
   // ── Delivery flow ────────────────────────────────────────────
   /// CONFIRMED v2 — generic status update, notifies the seller when
@@ -60,8 +87,8 @@ class OrderRepository {
   /// multiple pharmacies (Order.multiPharmacy / PharmacyPickup list).
   /// [sellerId] is the pharmacy's numeric seller id.
   Future<void> pickupSeller(String co, String sellerId) => _api.post(
-        ApiConfig.path(ApiConfig.pickupSeller, {'co': co, 'seller': sellerId}),
-      );
+    ApiConfig.path(ApiConfig.pickupSeller, {'co': co, 'seller': sellerId}),
+  );
 
   /// POST /orders/{co}/finish — CONFIRMED v3: the example body only shows
   /// `pod_photo`. Making it required now; method/given/signature are kept
@@ -73,12 +100,12 @@ class OrderRepository {
   /// [signature] is expected to be a base64 PNG string (adjust if backend
   /// wants a file upload instead — swap for MultipartFile.fromFile).
   Future<void> finish(
-    String co, {
-    required String podPhotoPath,
-    String? method,
-    String? given,
-    String? signatureBase64,
-  }) async {
+      String co, {
+        required String podPhotoPath,
+        String? method,
+        String? given,
+        String? signatureBase64,
+      }) async {
     final form = FormData.fromMap({
       'pod_photo': await MultipartFile.fromFile(podPhotoPath),
       if (method != null) 'method': method,
@@ -109,20 +136,28 @@ class OrderRepository {
       );
 
   // ── Building photos ────────────────────────────────────────────
-  Future<List<String>> fetchBuildingPhotos(String co) async {
+  /// CONFIRMED LIVE (2026-07-14): {"photos": [{"id":1, "url":"...",
+  /// "note":null, "by":"Zeidan Mohamed", "created_at":"..."}]} — each
+  /// entry is an OBJECT, not a plain URL string. The previous
+  /// `.toString()` on each raw map produced a garbage debug-string
+  /// ("{id: 1, url: ..., note: null, ...}") instead of the real URL,
+  /// which is exactly why every photo silently failed to load and fell
+  /// back to the placeholder — never a data problem, always this parsing bug.
+  Future<List<BuildingPhoto>> fetchBuildingPhotos(String co) async {
     final res = await _api.get(ApiConfig.path(ApiConfig.buildingPhotosGet, {'co': co}));
-    final list = (res['data'] ?? res['photos'] ?? const []) as List;
-    return list.map((e) => e.toString()).toList();
+    final list = (res['photos'] ?? res['data'] ?? const []) as List;
+    return list.map((e) => BuildingPhoto.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  /// POST /orders/{co}/building-photos — CONFIRMED v3 multipart fields:
-  /// {photo, customer_id} — was wrongly guessed as {file, note} before.
-  /// [customerId] is new — unclear exactly what it should identify (the
-  /// order's customer? unclear if optional) — sending order.id as a
-  /// reasonable default when not provided; verify with backend.
+  /// POST /orders/{co}/building-photos — field name CONFIRMED LIVE as
+  /// `file` (2026-07-14): a real request with `photo` got back
+  /// {"message":"The file field is required.","errors":{"file":[...]}} —
+  /// so the previous "CONFIRMED v3" comment claiming `photo` was actually
+  /// wrong. `customer_id` is optional; see order_detail_screen.dart for
+  /// why it's not sent (order.id would misidentify the customer).
   Future<void> uploadBuildingPhoto(String co, String filePath, {String? customerId}) async {
     final form = FormData.fromMap({
-      'photo': await MultipartFile.fromFile(filePath),
+      'file': await MultipartFile.fromFile(filePath),
       if (customerId != null) 'customer_id': customerId,
     });
     await _api.postMultipart(
@@ -221,5 +256,38 @@ class OrderRepository {
       'file': await MultipartFile.fromFile(filePath),
     });
     await _api.postMultipart(ApiConfig.profileDocument, form);
+  }
+
+  // ── Cash handover (Company Cash tab) — backend not built yet ────
+  // See api_config.dart for the "not confirmed" caveat on all of these.
+
+  /// CONFIRMED path from Postman (2026-07-15): GET /driver/cash-balance.
+  /// No example response saved though — field names below (amount/balance)
+  /// are still a guess. Logs the raw response so the real shape shows up
+  /// in logcat the first time this actually gets called.
+  Future<double> fetchCashBalance() async {
+    final res = await _api.get(ApiConfig.cashBalance);
+    debugPrint('[CashBalance] raw response: $res');
+    return (res['amount'] ?? res['balance'] ?? 0).toDouble();
+  }
+
+  /// CONFIRMED path from Postman (2026-07-15): GET /driver/cash-handovers.
+  /// Same caveat — no example response, field names still a guess.
+  Future<List<CashHandoverRecord>> fetchCashHandovers() async {
+    final res = await _api.get(ApiConfig.cashHandovers);
+    debugPrint('[CashHandovers] raw response: $res');
+    final list = (res['data'] ?? res['handovers'] ?? const []) as List;
+    return list.map((e) => CashHandoverRecord.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<CashHandoverSession> startCashHandover() async {
+    final res = await _api.post(ApiConfig.cashHandoverStart);
+    return CashHandoverSession.fromJson(res);
+  }
+
+  /// Returns 'pending' | 'confirmed' | 'expired' (best guess — unconfirmed).
+  Future<String> getCashHandoverStatus(String handoverId) async {
+    final res = await _api.get(ApiConfig.path(ApiConfig.cashHandoverStatus, {'id': handoverId}));
+    return (res['status'] ?? 'pending').toString();
   }
 }

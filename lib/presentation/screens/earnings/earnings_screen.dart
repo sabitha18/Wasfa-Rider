@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
+import 'package:wasfa_rider/data/repositories/order_repository.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
@@ -21,21 +23,118 @@ class _EarningsScreenState extends State<EarningsScreen> {
   String _tab = 'mine';
   late Timer _timer;
   DateTime _now = DateTime.now();
-  late final DateTime _shiftStart;
+  final _repo = OrderRepository();
 
-  final _bars = [
-    (h: '9',  v: 0.30), (h: '10', v: 0.53), (h: '11', v: 0.76),
-    (h: '12', v: 0.99), (h: '1',  v: 0.46), (h: '2',  v: 0.69),
-    (h: '3',  v: 0.92), (h: '4',  v: 0.62),
-  ];
+  // Week/Month tabs previously had no tap handler at all — 'Today' was
+  // hardcoded as permanently active and nothing else was wired up.
+  //
+  // CONFIRMED real shape from GET /earnings?period=... (seen live):
+  //   { "today": 334.874, "week": 334.874, "month": 335.796,
+  //     "balance": ..., "paid_out": ..., "rule": {..., "value": "2.000"},
+  //     "rows": [ {"amount": "334.874", "earned_on": "2026-07-14",
+  //                "created_at": "2026-07-14 08:34:25", "code": "APM64", ...}, ... ] }
+  // The `period` param does NOT actually filter the top-level today/week/
+  // month totals — those three always come back together regardless of
+  // what was requested. `rows` is the one thing that's period-scoped, and
+  // is real per-delivery data — used below to build an actual chart
+  // instead of the old hardcoded fake bars.
+  String _period = 'today';
+  bool _loadingPeriod = false;
+  Map<String, dynamic>? _periodData;
+
+  Future<void> _selectPeriod(String p) async {
+    if (p == _period && _periodData != null) return;
+    setState(() => _period = p);
+    await _fetchPeriodData(p);
+  }
+
+  Future<void> _fetchPeriodData(String p) async {
+    setState(() => _loadingPeriod = true);
+    try {
+      final data = await _repo.fetchEarnings(period: p);
+      debugPrint('[Earnings] period=$p response: $data');
+      if (!mounted) return;
+      setState(() { _periodData = data; _loadingPeriod = false; });
+    } catch (e) {
+      debugPrint('[Earnings] period=$p FAILED: $e');
+      if (!mounted) return;
+      setState(() { _periodData = null; _loadingPeriod = false; });
+    }
+  }
+
+  String _periodLabel(String p) => switch (p) {
+    'today' => 'Today',
+    'week' => context.tr('weekLabel'),
+    _ => context.tr('monthLabel'),
+  };
+
+  /// Real commission total for the selected period, straight from the
+  /// confirmed today/week/month keys — no more guessing at field names.
+  double get _periodTotal => (_periodData?[_period] as num?)?.toDouble() ?? 0.0;
+
+  /// Real commission rate from the backend rule, e.g. "2.000" -> 2%.
+  /// Replaces whatever hardcoded percentage string was shown before.
+  String? get _commissionRatePercent {
+    final rule = _periodData?['rule'];
+    if (rule is! Map) return null;
+    final value = double.tryParse('${rule['value']}');
+    if (value == null) return null;
+    final type = rule['type'];
+    return type == 'percent' ? '${value.toStringAsFixed(0)}%' : null;
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_periodData?['rows'] as List?) ?? const []).cast<Map<String, dynamic>>();
+
+  /// Builds real chart bars from the actual per-delivery rows — grouped
+  /// by hour of day for Today, or by calendar day for Week/Month. Replaces
+  /// the old _bars field, which was entirely hardcoded sample data that
+  /// never changed no matter what was actually earned.
+  List<({String h, double v})> _buildBars() {
+    final rows = _rows;
+    if (rows.isEmpty) return const [];
+
+    double amountOf(Map<String, dynamic> r) => double.tryParse('${r['amount']}') ?? 0.0;
+
+    if (_period == 'today') {
+      final byHour = <int, double>{};
+      for (final r in rows) {
+        final createdAt = r['created_at'] as String?;
+        if (createdAt == null || !createdAt.contains(' ')) continue;
+        final hour = int.tryParse(createdAt.split(' ').last.split(':').first);
+        if (hour == null) continue;
+        byHour[hour] = (byHour[hour] ?? 0) + amountOf(r);
+      }
+      final hours = byHour.keys.toList()..sort();
+      final maxVal = byHour.values.fold(0.0, (a, b) => a > b ? a : b);
+      return hours.map((h) {
+        final label = h == 0 ? '12a' : h < 12 ? '$h' : h == 12 ? '12p' : '${h - 12}p';
+        return (h: label, v: maxVal > 0 ? byHour[h]! / maxVal : 0.0);
+      }).toList();
+    } else {
+      final byDay = <String, double>{};
+      for (final r in rows) {
+        final day = r['earned_on'] as String?;
+        if (day == null) continue;
+        byDay[day] = (byDay[day] ?? 0) + amountOf(r);
+      }
+      final days = byDay.keys.toList()..sort();
+      final maxVal = byDay.values.fold(0.0, (a, b) => a > b ? a : b);
+      return days.map((d) {
+        final parts = d.split('-'); // yyyy-mm-dd
+        final label = parts.length == 3 ? '${parts[2]}/${parts[1]}' : d;
+        return (h: label, v: maxVal > 0 ? byDay[d]! / maxVal : 0.0);
+      }).toList();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _shiftStart = DateTime.now().subtract(const Duration(hours: 4, minutes: 22));
     _timer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+    _fetchPeriodData('today'); // now fetched immediately too, so Today's chart is real from the start
   }
 
   @override
@@ -56,16 +155,39 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final failed = ordersVM.orders.where((o) => o.status == OrderStatus.failed).length;
     final totalKm = done.fold(0.0, (s, o) => s + o.distanceKm);
 
-    final elapsedMin = _now.difference(_shiftStart).inMinutes.clamp(0, 9999);
+    final isToday = _period == 'today';
+    // 'today' keeps using the already-working live view-model data for its
+    // headline stats (trusted existing source); week/month now use the
+    // CONFIRMED real fields instead of guessed key names.
+    final displayEarnings = isToday ? earnings : _periodTotal;
+    final displayDeliveries = isToday ? done.length : _rows.length;
+    // Failed-delivery count and total distance simply aren't present
+    // anywhere in this endpoint's response — rather than show a fake or
+    // wrong number for Week/Month, these stay null and render as "—".
+    final int? displayFailed = isToday ? failed : null;
+    final double? displayKm = isToday ? totalKm : null;
+    final bars = _buildBars();
+
+    // Was previously a hardcoded fake offset (now - 4h22m, always the same
+    // regardless of when the driver actually went on shift). shift_started_at
+    // is confirmed to come back from /me — now actually used.
+    final shiftStart = driver?.shiftStartedAt ?? _now;
+    final elapsedMin = _now.difference(shiftStart).inMinutes.clamp(0, 9999);
     final hh = elapsedMin ~/ 60;
     final mm = elapsedMin % 60;
-    const idleMin = 38;
+    // Active/Idle split still has no real backend source — no endpoint
+    // tracks minute-by-minute activity — so idleMin stays a placeholder.
+    // Flagging this distinctly from the now-real elapsed/shift-start time
+    // rather than silently leaving it looking equally legitimate.
+    const idleMin = 38; // TODO: fake — no backend data source exists for this yet
     final earningPerHour = elapsedMin > 0 ? (earnings / (elapsedMin / 60)) : 0.0;
 
-    final h = _shiftStart.hour > 12 ? _shiftStart.hour - 12
-        : (_shiftStart.hour == 0 ? 12 : _shiftStart.hour);
-    final ampm = _shiftStart.hour < 12 ? 'AM' : 'PM';
-    final shiftStartStr = '$h:${_shiftStart.minute.toString().padLeft(2,'0')} $ampm';
+    final h = shiftStart.hour > 12 ? shiftStart.hour - 12
+        : (shiftStart.hour == 0 ? 12 : shiftStart.hour);
+    final ampm = shiftStart.hour < 12 ? 'AM' : 'PM';
+    final shiftStartStr = driver?.shiftStartedAt != null
+        ? '$h:${shiftStart.minute.toString().padLeft(2,'0')} $ampm'
+        : '—'; // not on shift / backend hasn't set a start time
 
     return Scaffold(
       backgroundColor: WTheme.blush,
@@ -97,7 +219,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
             const SizedBox(height: 14),
 
             if (_tab == 'company') ...[
-              _CompanyCashSection(earnings: earnings, done: done.length),
+              const _CompanyCashSection(),
             ] else ...[
               // My Earnings hero
               Container(
@@ -112,16 +234,23 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.30), blurRadius: 30, offset: const Offset(0, 12))],
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(context.tr('myCommissionToday'), style: GoogleFonts.dmSans(
-                      color: Colors.white.withOpacity(0.75), fontSize: 11,
-                      fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+                  Text(isToday ? context.tr('myCommissionToday') : 'My commission — ${_periodLabel(_period)}',
+                      style: GoogleFonts.dmSans(
+                          color: Colors.white.withOpacity(0.75), fontSize: 11,
+                          fontWeight: FontWeight.w700, letterSpacing: 0.6)),
                   const SizedBox(height: 4),
-                  RichText(text: TextSpan(children: [
-                    TextSpan(text: earnings.toStringAsFixed(3), style: GoogleFonts.dmSans(
-                        color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: -1)),
-                    TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
-                        color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w600)),
-                  ])),
+                  if (_loadingPeriod)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
+                    )
+                  else
+                    RichText(text: TextSpan(children: [
+                      TextSpan(text: displayEarnings.toStringAsFixed(3), style: GoogleFonts.dmSans(
+                          color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: -1)),
+                      TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
+                          color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w600)),
+                    ])),
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
@@ -129,7 +258,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       color: const Color(0xFF21B47A).withOpacity(0.25),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text(context.tr('deliveriesCountTemplate').replaceFirst('{n}', '${done.length}'), style: GoogleFonts.dmSans(
+                    child: Text(context.tr('deliveriesCountTemplate').replaceFirst('{n}', '$displayDeliveries'), style: GoogleFonts.dmSans(
                         color: const Color(0xFFB7F5CE), fontSize: 11, fontWeight: FontWeight.w700)),
                   ),
                   const SizedBox(height: 12),
@@ -144,7 +273,12 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       children: [
                         TextSpan(text: context.tr('commissionRateLine1'),
                             style: const TextStyle(fontWeight: FontWeight.w700)),
-                        TextSpan(text: context.tr('commissionRatePercent')),
+                        // Real rate from the backend's rule.value once loaded
+                        // (confirmed live: e.g. 2%) — was a hardcoded string
+                        // before, which had drifted from the real admin-set rate.
+                        TextSpan(text: _commissionRatePercent != null
+                            ? ' ${_commissionRatePercent!} of each order total'
+                            : context.tr('commissionRatePercent')),
                       ],
                     )),
                   ),
@@ -152,7 +286,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
               ),
               const SizedBox(height: 14),
 
-              // Period tabs
+              // Period tabs — previously hardcoded to always show Today
+              // as active with no tap handler at all; Week/Month did
+              // nothing when tapped because there was nothing to tap.
               Container(
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
@@ -161,22 +297,28 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 14, offset: const Offset(0, 4))],
                 ),
                 child: Row(children: [
-                  for (final e in [('Today', true), (context.tr('weekLabel'), false), (context.tr('monthLabel'), false)])
-                    Expanded(child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 9),
-                      decoration: BoxDecoration(
-                        color: e.$2 ? WTheme.rose : Colors.transparent,
-                        borderRadius: BorderRadius.circular(11),
+                  for (final p in ['today', 'week', 'month'])
+                    Expanded(child: GestureDetector(
+                      onTap: () => _selectPeriod(p),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: _period == p ? WTheme.rose : Colors.transparent,
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Center(child: Text(_periodLabel(p), style: GoogleFonts.dmSans(
+                            fontSize: 11, fontWeight: FontWeight.w700,
+                            color: _period == p ? Colors.white : WTheme.muted))),
                       ),
-                      child: Center(child: Text(e.$1, style: GoogleFonts.dmSans(
-                          fontSize: 11, fontWeight: FontWeight.w700,
-                          color: e.$2 ? Colors.white : WTheme.muted))),
                     )),
                 ]),
               ),
               const SizedBox(height: 14),
 
-              // Hourly bar chart
+              // Earnings breakdown chart — now built from the real `rows`
+              // array (per-delivery earnings with real dates/timestamps)
+              // instead of a hardcoded fake bar list that never changed.
+              // Grouped by hour for Today, by day for Week/Month.
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -185,43 +327,54 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 14, offset: const Offset(0, 4))],
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(context.tr('hourlyCap'), style: GoogleFonts.dmSans(
+                  Text(isToday ? context.tr('hourlyCap') : 'DAILY BREAKDOWN', style: GoogleFonts.dmSans(
                       fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
                   const SizedBox(height: 14),
-                  SizedBox(
-                    height: 118,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: _bars.asMap().entries.map((e) {
-                        final isLast = e.key == _bars.length - 1;
-                        return Expanded(child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 3),
-                          child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-                            Expanded(child: Align(
-                              alignment: Alignment.bottomCenter,
-                              child: FractionallySizedBox(
-                                heightFactor: e.value.v,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                                      colors: isLast
-                                          ? [WTheme.rose, const Color(0xFFC84686)]
-                                          : [WTheme.aqua, WTheme.sky],
+                  if (_loadingPeriod)
+                    const SizedBox(height: 118, child: Center(child: CircularProgressIndicator(strokeWidth: 3)))
+                  else if (bars.isEmpty)
+                    SizedBox(
+                      height: 118,
+                      child: Center(child: Text(
+                        _periodData == null ? "Couldn't load this data" : 'No earnings yet for this period',
+                        style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600),
+                      )),
+                    )
+                  else
+                    SizedBox(
+                      height: 118,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: bars.asMap().entries.map((e) {
+                          final isLast = e.key == bars.length - 1;
+                          return Expanded(child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+                              Expanded(child: Align(
+                                alignment: Alignment.bottomCenter,
+                                child: FractionallySizedBox(
+                                  heightFactor: e.value.v,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                                        colors: isLast
+                                            ? [WTheme.rose, const Color(0xFFC84686)]
+                                            : [WTheme.aqua, WTheme.sky],
+                                      ),
+                                      borderRadius: BorderRadius.circular(6),
                                     ),
-                                    borderRadius: BorderRadius.circular(6),
                                   ),
                                 ),
-                              ),
-                            )),
-                            const SizedBox(height: 4),
-                            Text(e.value.h, style: GoogleFonts.dmSans(
-                                fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700)),
-                          ]),
-                        ));
-                      }).toList(),
+                              )),
+                              const SizedBox(height: 4),
+                              Text(e.value.h, style: GoogleFonts.dmSans(
+                                  fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700)),
+                            ]),
+                          ));
+                        }).toList(),
+                      ),
                     ),
-                  ),
                 ]),
               ),
               const SizedBox(height: 14),
@@ -233,9 +386,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 crossAxisSpacing: 12, mainAxisSpacing: 12,
                 childAspectRatio: 2.4,
                 children: [
-                  _StatBox(v: '${done.length}', k: context.tr('deliveriesStatLabel')),
-                  _StatBox(v: '$failed', k: context.tr('failedStatLabel')),
-                  _StatBox(v: '${totalKm.toStringAsFixed(1)} km', k: context.tr('distanceStatLabel')),
+                  _StatBox(v: '$displayDeliveries', k: context.tr('deliveriesStatLabel')),
+                  _StatBox(v: displayFailed != null ? '$displayFailed' : '—', k: context.tr('failedStatLabel')),
+                  _StatBox(v: displayKm != null ? '${displayKm.toStringAsFixed(1)} km' : '—', k: context.tr('distanceStatLabel')),
                   _StatBox(v: '⭐ 4.8', k: context.tr('ratingStatLabel')),
                 ],
               ),
@@ -316,23 +469,76 @@ class _EarningsScreenState extends State<EarningsScreen> {
   }
 }
 
-class _CompanyCashSection extends StatelessWidget {
-  const _CompanyCashSection({required this.earnings, required this.done});
-  final double earnings;
-  final int done;
+class _CompanyCashSection extends StatefulWidget {
+  const _CompanyCashSection();
 
-  // Mock handover history until a real companyCash/handoverHistory model exists
-  static final List<_CashHandover> _mockHistory = [
-    _CashHandover(amount: 86.000, isBank: false, dateLabel: 'May 18, 11:00 PM', confirmedBy: 'Saud Q.', pending: false),
-    _CashHandover(amount: 124.500, isBank: false, dateLabel: 'May 17, 11:12 PM', confirmedBy: 'Saud Q.', pending: false),
-    _CashHandover(amount: 92.250, isBank: false, dateLabel: 'May 16, 10:44 PM', confirmedBy: 'Maryam B.', pending: false),
-  ];
+  @override
+  State<_CompanyCashSection> createState() => _CompanyCashSectionState();
+}
 
-  double get _companyCash => earnings > 0 ? 38.100 : 0.0; // placeholder cash-to-hand-over total
+class _CompanyCashSectionState extends State<_CompanyCashSection> {
+  final _repo = OrderRepository();
+  double? _balance;
+  List<CashHandoverRecord> _history = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final balance = await _repo.fetchCashBalance();
+      final history = await _repo.fetchCashHandovers();
+      if (!mounted) return;
+      setState(() { _balance = balance; _history = history; _loading = false; });
+    } catch (e) {
+      // Backend doesn't have this built yet as of 2026-07-15 — show a
+      // clear "not available" state rather than a fake number or a crash.
+      debugPrint('[CompanyCash] load FAILED (expected until backend ships this): $e');
+      if (!mounted) return;
+      setState(() { _loading = false; _error = 'not_ready'; });
+    }
+  }
+
+  void _openQr() {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => CashHandoverQrScreen(
+      onBack: () => Navigator.of(context).pop(),
+      onConfirmed: () {
+        Navigator.of(context).pop();
+        _load(); // refresh real balance/history after a successful handover
+      },
+    )));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final totalEverHanded = _mockHistory.fold(0.0, (s, h) => s + h.amount);
+    if (_loading) {
+      return const Padding(padding: EdgeInsets.symmetric(vertical: 60),
+          child: Center(child: CircularProgressIndicator()));
+    }
+    if (_error != null) {
+      // Backend doesn't have cash-balance/cash-handovers built yet.
+      // Being upfront about that instead of showing fake numbers.
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+        child: Column(children: [
+          Text("Company Cash isn't available yet — check back soon",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          TextButton(onPressed: _load, child: Text('Retry',
+              style: GoogleFonts.dmSans(color: WTheme.sky, fontWeight: FontWeight.w800))),
+        ]),
+      );
+    }
+
+    final companyCash = _balance ?? 0.0;
+    final totalEverHanded = _history.fold(0.0, (s, h) => s + h.amount);
 
     return Column(children: [
       // ── Cash to hand over hero ──
@@ -350,7 +556,7 @@ class _CompanyCashSection extends StatelessWidget {
               color: Colors.white.withOpacity(0.75), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6)),
           const SizedBox(height: 4),
           RichText(text: TextSpan(children: [
-            TextSpan(text: _companyCash.toStringAsFixed(3), style: GoogleFonts.dmSans(
+            TextSpan(text: companyCash.toStringAsFixed(3), style: GoogleFonts.dmSans(
                 color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: -1)),
             TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(
                 color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w600)),
@@ -370,9 +576,9 @@ class _CompanyCashSection extends StatelessWidget {
       const SizedBox(height: 14),
 
       // ── Action buttons or "all clear" state ──
-      if (_companyCash > 0) ...[
+      if (companyCash > 0) ...[
         GestureDetector(
-          onTap: () => showWToast(context, context.tr('cashHandoverQrToast')),
+          onTap: _openQr,
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -387,6 +593,8 @@ class _CompanyCashSection extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         GestureDetector(
+          // Bank withdrawal flow wasn't part of what backend spec'd — left
+          // as a toast until that gets designed separately.
           onTap: () => showWToast(context, context.tr('bankWithdrawToast')),
           child: Container(
             width: double.infinity,
@@ -423,7 +631,7 @@ class _CompanyCashSection extends StatelessWidget {
       ),
       const SizedBox(height: 8),
 
-      if (_mockHistory.isEmpty)
+      if (_history.isEmpty)
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 24),
@@ -433,7 +641,7 @@ class _CompanyCashSection extends StatelessWidget {
               style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12))),
         )
       else ...[
-        for (final h in _mockHistory) _HandoverCard(handover: h),
+        for (final h in _history) _HandoverCard(handover: h),
         const SizedBox(height: 6),
         Container(
           width: double.infinity,
@@ -450,22 +658,192 @@ class _CompanyCashSection extends StatelessWidget {
   }
 }
 
-// ── Handover record (mock model) ────────────────────────────────
-class _CashHandover {
-  final double amount;
-  final bool isBank;
-  final String dateLabel;
-  final String confirmedBy;
-  final bool pending;
-  const _CashHandover({
-    required this.amount, required this.isBank,
-    required this.dateLabel, required this.confirmedBy, required this.pending,
-  });
+// ── Real-time cash handover QR/code screen ──────────────────────
+// Backend endpoints for this don't exist yet (as of 2026-07-15) — every
+// call here will fail gracefully with a clear "not available" message
+// until they do. Built ahead of time so it's ready to go the moment
+// they ship, matching the confirmed decisions: QR encodes a full link
+// (dispatcher scans with their phone's own camera, no custom scanner
+// needed since they only have a dashboard, not an app), plus a 6-digit
+// manual-entry fallback. Client-side decision: always request a brand
+// new session the instant the local 2-minute countdown hits zero,
+// rather than assuming anything about how backend manages expiry
+// internally — simplest, most robust behavior regardless of what
+// backend does on their end.
+class CashHandoverQrScreen extends StatefulWidget {
+  const CashHandoverQrScreen({super.key, required this.onBack, required this.onConfirmed});
+  final VoidCallback onBack;
+  final VoidCallback onConfirmed;
+
+  @override
+  State<CashHandoverQrScreen> createState() => _CashHandoverQrScreenState();
 }
 
+class _CashHandoverQrScreenState extends State<CashHandoverQrScreen> {
+  final _repo = OrderRepository();
+  CashHandoverSession? _session;
+  bool _loading = true;
+  bool _confirmed = false;
+  String? _error;
+  Timer? _countdownTimer;
+  Timer? _statusPollTimer;
+  int _secondsLeft = 120;
+
+  @override
+  void initState() {
+    super.initState();
+    _startNewSession();
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    _statusPollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _startNewSession() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final session = await _repo.startCashHandover();
+      if (!mounted) return;
+      setState(() {
+        _session = session;
+        _loading = false;
+        _secondsLeft = session.expiresAt != null
+            ? session.expiresAt!.difference(DateTime.now()).inSeconds.clamp(0, 999)
+            : 120;
+      });
+      _startTimers();
+    } catch (e) {
+      debugPrint('[CashHandover] startCashHandover FAILED (expected until backend ships this): $e');
+      if (!mounted) return;
+      setState(() { _loading = false; _error = "This isn't available yet — check back soon."; });
+    }
+  }
+
+  void _startTimers() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_secondsLeft <= 1) {
+        setState(() => _secondsLeft = 0);
+        _startNewSession(); // client-decided: always get a fresh one on local expiry
+      } else {
+        setState(() => _secondsLeft -= 1);
+      }
+    });
+    _statusPollTimer?.cancel();
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 3), (_) => _checkStatus());
+  }
+
+  Future<void> _checkStatus() async {
+    final session = _session;
+    if (session == null || _confirmed) return;
+    try {
+      final status = await _repo.getCashHandoverStatus(session.id);
+      if (!mounted) return;
+      if (status == 'confirmed') {
+        _countdownTimer?.cancel();
+        _statusPollTimer?.cancel();
+        setState(() => _confirmed = true);
+      } else if (status == 'expired') {
+        _startNewSession();
+      }
+    } catch (e) {
+      debugPrint('[CashHandover] status check failed (will retry next tick): $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: WTheme.blush,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent, elevation: 0,
+        leading: IconButton(icon: const Icon(Icons.arrow_back, color: WTheme.navy), onPressed: widget.onBack),
+        title: Text('Hand Over Cash', style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 16)),
+      ),
+      body: SafeArea(
+        child: Center(child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: _confirmed ? _buildConfirmed()
+              : _loading ? const Padding(padding: EdgeInsets.symmetric(vertical: 80), child: CircularProgressIndicator())
+              : _error != null ? _buildError()
+              : _buildSession(),
+        )),
+      ),
+    );
+  }
+
+  Widget _buildError() => Column(mainAxisSize: MainAxisSize.min, children: [
+    Text(_error!, textAlign: TextAlign.center, style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 14)),
+    const SizedBox(height: 16),
+    TextButton(onPressed: _startNewSession, child: Text('Retry',
+        style: GoogleFonts.dmSans(color: WTheme.sky, fontWeight: FontWeight.w800))),
+  ]);
+
+  Widget _buildConfirmed() => Column(mainAxisSize: MainAxisSize.min, children: [
+    Container(width: 80, height: 80,
+        decoration: const BoxDecoration(color: WTheme.ok, shape: BoxShape.circle),
+        child: const Icon(Icons.check, color: Colors.white, size: 44)),
+    const SizedBox(height: 16),
+    Text('Handed over!', style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 20)),
+    const SizedBox(height: 8),
+    Text('${_session?.amount.toStringAsFixed(3) ?? "—"} KD cleared from your balance',
+        textAlign: TextAlign.center, style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13)),
+    const SizedBox(height: 24),
+    ElevatedButton(
+      onPressed: widget.onConfirmed,
+      style: ElevatedButton.styleFrom(backgroundColor: WTheme.ok, padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      child: Text('Done', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+    ),
+  ]);
+
+  Widget _buildSession() {
+    final session = _session!;
+    final mm = (_secondsLeft ~/ 60).toString().padLeft(2, '0');
+    final ss = (_secondsLeft % 60).toString().padLeft(2, '0');
+    return Column(children: [
+      Text('${session.amount.toStringAsFixed(3)} KD', style: GoogleFonts.dmSans(
+          color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 32)),
+      const SizedBox(height: 4),
+      Text('Show this to your dispatcher', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13)),
+      const SizedBox(height: 24),
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20),
+            boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 24, offset: const Offset(0, 10))]),
+        child: session.qrData.isNotEmpty
+            ? QrImageView(data: session.qrData, version: QrVersions.auto, size: 220)
+            : SizedBox(width: 220, height: 220, child: Center(child: Text('QR unavailable',
+            style: GoogleFonts.dmSans(color: WTheme.muted)))),
+      ),
+      const SizedBox(height: 20),
+      Text('or enter this code manually', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12)),
+      const SizedBox(height: 8),
+      Text(
+        session.code.isNotEmpty ? session.code.split('').join(' ') : '——————',
+        style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 30, letterSpacing: 4),
+      ),
+      const SizedBox(height: 20),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(999)),
+        child: Text('Expires in $mm:$ss', style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w700, fontSize: 13)),
+      ),
+      const SizedBox(height: 8),
+      Text('A new code generates automatically when this expires',
+          textAlign: TextAlign.center, style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+    ]);
+  }
+}
+
+// ── Handover history card ────────────────────────────────────────
 class _HandoverCard extends StatelessWidget {
   const _HandoverCard({required this.handover});
-  final _CashHandover handover;
+  final CashHandoverRecord handover;
 
   @override
   Widget build(BuildContext context) {
@@ -502,7 +880,7 @@ class _HandoverCard extends StatelessWidget {
             ],
           ]),
           const SizedBox(height: 3),
-          Text('${handover.dateLabel} · ${handover.confirmedBy}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
+          Text('${handover.dateLabel} · ${handover.confirmedBy ?? "—"}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
         ])),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

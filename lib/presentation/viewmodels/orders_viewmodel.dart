@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../core/network/api_client.dart';
 import '../../data/models/models.dart';
@@ -5,6 +6,8 @@ import '../../data/repositories/order_repository.dart';
 
 class OrdersViewModel extends ChangeNotifier {
   final _repo = OrderRepository();
+  Timer? _autoRefreshTimer;
+  Timer? _batchPollTimer;
 
   List<Order> _orders = [];
   Batch? _pendingBatch;
@@ -25,14 +28,14 @@ class OrdersViewModel extends ChangeNotifier {
 
   Order? get activeOrder => _orders.firstWhereOrNull(
         (o) => o.status == OrderStatus.active,
-      );
+  );
 
   List<Order> get activeOrders => _orders.where((o) =>
       [OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending]
           .contains(o.status)).toList();
 
   List<Order> get doneOrders => _orders.where((o) =>
-      o.status == OrderStatus.done || o.status == OrderStatus.failed).toList();
+  o.status == OrderStatus.done || o.status == OrderStatus.failed).toList();
 
   /// Call from a FutureBuilder / initState instead of the old sync init().
   /// Loads active orders + any pending batch offer from the real API.
@@ -41,7 +44,22 @@ class OrdersViewModel extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      _orders = await _repo.fetchOrders(tab: 'active');
+      // Previously only ever fetched tab=active — meaning Done/All order
+      // history was NEVER actually loaded from the backend. It only ever
+      // showed orders that happened to get marked delivered during THIS
+      // session (a local in-memory status change), and reset to
+      // completely empty on every fresh app start since nothing re-fetched
+      // historical completed orders. Now fetches both and merges them.
+      final results = await Future.wait([
+        _repo.fetchOrders(tab: 'active'),
+        _repo.fetchOrders(tab: 'done'),
+      ]);
+      // Dedupe by id in case an order transitions status mid-fetch and
+      // briefly appears in both lists — done wins since it's merged last.
+      final combined = <String, Order>{};
+      for (final o in results[0]) combined[o.id] = o;
+      for (final o in results[1]) combined[o.id] = o;
+      _orders = combined.values.toList();
       _pendingBatch = await _repo.fetchPendingBatch();
     } on ApiException catch (e) {
       error = e.message;
@@ -52,6 +70,111 @@ class OrdersViewModel extends ChangeNotifier {
   }
 
   Future<void> refresh() => load();
+
+  /// Re-fetches a single order fresh from the backend (GET /orders/{code})
+  /// and replaces it in the in-memory list. This endpoint existed in the
+  /// repository but was never actually called anywhere — OrderDetailScreen
+  /// only ever showed whatever was already loaded from the last /orders or
+  /// /batch list poll (up to 20s stale), with no way to see this in
+  /// logcat since no request was ever made for it. Called once when the
+  /// detail screen opens.
+  Future<void> refreshOrder(String id) async {
+    final existing = findById(id);
+    if (existing == null) return;
+    await _guarded(() async {
+      final fresh = await _repo.fetchOrder(existing.co ?? existing.id);
+      // Guard against ever repeating the corruption bug found live: a
+      // response-shape mismatch once produced an Order with a blank id,
+      // which silently overwrote this order's correct entry (replacement
+      // is by array position, not by matching id). Refuse to apply a
+      // fetch that came back malformed like that, regardless of cause.
+      if (fresh.id.isEmpty) {
+        debugPrint('[OrdersViewModel] refreshOrder($id) got a malformed order back (blank id) — ignoring, keeping existing cached data');
+        return;
+      }
+      _updateOrder(id, fresh);
+    });
+    // Silent on failure — the already-loaded (possibly stale) data just
+    // stays on screen rather than blanking out over a transient network hiccup.
+  }
+
+  /// Driver accepted a new-batch offer (see BatchIncomingScreen). Reloads
+  /// the full order list afterward — the batch's orders should now come
+  /// back as real active/next/later orders instead of OrderStatus.batchPending.
+  Future<bool> acceptPendingBatch() async {
+    final batch = _pendingBatch;
+    if (batch?.id == null) return false;
+    final ok = await _guarded(() => _repo.acceptBatch(batch!.id!));
+    if (ok) await load();
+    return ok;
+  }
+
+  /// Driver declined a new-batch offer. Clears it locally right away
+  /// rather than waiting for the next poll to notice it's gone.
+  Future<bool> rejectPendingBatch() async {
+    final batch = _pendingBatch;
+    if (batch?.id == null) return false;
+    final ok = await _guarded(() => _repo.rejectBatch(batch!.id!));
+    if (ok) {
+      _pendingBatch = null;
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  /// Silently re-polls /orders every [interval] — a stopgap for "the
+  /// driver should see a newly-assigned order without manually pulling
+  /// to refresh". A real push (FCM new-order notification -> trigger
+  /// refresh immediately) should replace/supplement this once that's
+  /// wired up; this polling is what covers the gap until then, and is
+  /// also a reasonable permanent fallback in case a push is ever missed.
+  /// Safe to call repeatedly — restarts the timer rather than stacking.
+  void startAutoRefresh({Duration interval = const Duration(seconds: 20)}) {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = Timer.periodic(interval, (_) => refresh());
+  }
+
+  void stopAutoRefresh() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+  }
+
+  /// Batch offers have a 15-SECOND countdown (see BatchIncomingScreen), but
+  /// the only thing checking for them was the general 20s order refresh —
+  /// meaning a batch could easily expire before the app ever noticed it,
+  /// even with the app open. This polls the lightweight /batch-check
+  /// endpoint on its own, much tighter interval, independent of the
+  /// general order refresh, specifically so this has a real chance of
+  /// catching an offer within its own lifetime.
+  void startBatchPolling({Duration interval = const Duration(seconds: 5)}) {
+    _batchPollTimer?.cancel();
+    _batchPollTimer = Timer.periodic(interval, (_) => _pollForBatch());
+  }
+
+  void stopBatchPolling() {
+    _batchPollTimer?.cancel();
+    _batchPollTimer = null;
+  }
+
+  Future<void> _pollForBatch() async {
+    try {
+      final batch = await _repo.fetchPendingBatch();
+      if (batch?.id != _pendingBatch?.id) {
+        _pendingBatch = batch;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Silent — a transient failure on this lightweight poll shouldn't
+      // disrupt anything else on screen; the next tick will just try again.
+    }
+  }
+
+  @override
+  void dispose() {
+    stopAutoRefresh();
+    stopBatchPolling();
+    super.dispose();
+  }
 
   Order? findById(String id) => _orders.firstWhereOrNull((o) => o.id == id);
 
@@ -120,21 +243,21 @@ class OrdersViewModel extends ChangeNotifier {
   /// sent too (kept optional server-side per the same endpoint's ambiguity
   /// — see OrderRepository.finish).
   Future<void> markDelivered(
-    String orderId, {
-    required String podPhotoPath,
-    String? payMethod,
-    String? given,
-    String? signatureBase64,
-  }) async {
+      String orderId, {
+        required String podPhotoPath,
+        String? payMethod,
+        String? given,
+        String? signatureBase64,
+      }) async {
     final o = findById(orderId);
     if (o == null) return;
     final ok = await _guarded(() => _repo.finish(
-          o.co ?? o.id,
-          podPhotoPath: podPhotoPath,
-          method: payMethod,
-          given: given,
-          signatureBase64: signatureBase64,
-        ));
+      o.co ?? o.id,
+      podPhotoPath: podPhotoPath,
+      method: payMethod,
+      given: given,
+      signatureBase64: signatureBase64,
+    ));
     if (!ok) return;
     _updateOrder(orderId, o.copyWith(
       status: OrderStatus.done,

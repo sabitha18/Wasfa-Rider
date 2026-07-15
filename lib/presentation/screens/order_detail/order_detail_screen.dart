@@ -1,14 +1,17 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
+import 'package:wasfa_rider/data/repositories/order_repository.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 import 'package:wasfa_rider/core/constants/app_strings.dart';
 
-class OrderDetailScreen extends StatelessWidget {
+class OrderDetailScreen extends StatefulWidget {
   const OrderDetailScreen({
     super.key,
     required this.orderId,
@@ -25,10 +28,49 @@ class OrderDetailScreen extends StatelessWidget {
   final ValueChanged<Order> onOpenMap;
 
   @override
+  State<OrderDetailScreen> createState() => _OrderDetailScreenState();
+}
+
+class _OrderDetailScreenState extends State<OrderDetailScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Was previously never called at all — this screen only ever showed
+    // whatever the last /orders or /batch list poll happened to have
+    // cached, with no way to see a request for it in logcat since none
+    // was ever made. Now re-checks the backend fresh every time this
+    // screen opens.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<OrdersViewModel>().refreshOrder(widget.orderId);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final orderId = widget.orderId;
+    final onBack = widget.onBack;
+    final onArrive = widget.onArrive;
+    final onCantDeliver = widget.onCantDeliver;
+    final onTransitionState = widget.onTransitionState;
+    final onMultiPickup = widget.onMultiPickup;
+    final onOpenMap = widget.onOpenMap;
     final vm    = context.watch<OrdersViewModel>();
     final order = vm.findById(orderId);
-    if (order == null) return Scaffold(body: Center(child: Text(context.tr('orderNotFound'))));
+    if (order == null) {
+      // TEMP trace — tracing an intermittent "Order not found" report.
+      // Shows exactly which ID was requested vs what's actually loaded,
+      // so we can tell whether this is an ID-format mismatch, a genuine
+      // race with the order list refreshing this order out from under the
+      // screen, or something else entirely. Remove once confirmed/fixed.
+      debugPrint('[OrderDetail] "$orderId" not found. Currently loaded IDs: ${vm.orders.map((o) => o.id).toList()}');
+      return Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent, elevation: 0,
+          leading: IconButton(icon: const Icon(Icons.arrow_back, color: WTheme.navy), onPressed: onBack),
+        ),
+        body: Center(child: Text(context.tr('orderNotFound'))),
+      );
+    }
     final allCount = vm.orders.where((o) => [
       OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending
     ].contains(o.status)).length;
@@ -166,9 +208,13 @@ class OrderDetailScreen extends StatelessWidget {
 
   Widget _whatsappBtn(Order order, BuildContext context) => GestureDetector(
     onTap: () async {
-      final msg = Uri.encodeComponent('Hi ${order.patient}, your payment link for WASFA order #${order.id}: pay.wasfakw.com/o/${order.id} · ${order.total.toStringAsFixed(3)} KD');
-      final url = 'https://wa.me/${order.phone.replaceAll(RegExp(r'\D'), '')}?text=$msg';
-      if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
+      // TEMPORARILY DISABLED — this used to build a WhatsApp message
+      // containing a fabricated payment URL (pay.wasfakw.com/o/{id}) that
+      // was never confirmed with backend and almost certainly isn't a
+      // real, working page. Sending a broken payment link to an actual
+      // customer is worse than not sending one at all. Restore the real
+      // link/flow here once backend confirms the actual format or endpoint.
+      showWToast(context, "Payment link isn't ready yet — check back soon");
     },
     child: Container(
       width: double.infinity,
@@ -367,7 +413,14 @@ class _RichItemCardState extends State<_RichItemCard> {
                       ],
                     ),
                     child: Stack(children: [
-                      const Center(child: Text('💊', style: TextStyle(fontSize: 120, height: 1))),
+                      if (item.imageUrl != null)
+                        Positioned.fill(child: ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: Image.network(item.imageUrl!, fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Center(child: Text('💊', style: TextStyle(fontSize: 120, height: 1)))),
+                        ))
+                      else
+                        const Center(child: Text('💊', style: TextStyle(fontSize: 120, height: 1))),
                       Positioned(top: 14, right: 14, child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         decoration: BoxDecoration(
@@ -480,7 +533,13 @@ class _RichItemCardState extends State<_RichItemCard> {
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [BoxShadow(color: item.color.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 4))],
                   ),
-                  child: const Center(child: Text('💊', style: TextStyle(fontSize: 28))),
+                  child: item.imageUrl != null
+                      ? ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(item.imageUrl!, fit: BoxFit.cover, width: 64, height: 64,
+                        errorBuilder: (_, __, ___) => const Center(child: Text('💊', style: TextStyle(fontSize: 28)))),
+                  )
+                      : const Center(child: Text('💊', style: TextStyle(fontSize: 28))),
                 ),
                 // Tag badge
                 Positioned(top: -4, right: -4, child: Container(
@@ -818,6 +877,11 @@ class _BigPaymentStatus extends StatelessWidget {
 }
 
 // ── Building Photos Block ──────────────────────────────────────
+// Was entirely local/in-memory before — the list reset every time you
+// left this screen, "ADD BUILDING PHOTO" never opened a real camera, and
+// nothing was ever sent to the backend. The endpoints for this
+// (GET/POST /orders/{co}/building-photos) were already built and CONFIRMED
+// working — just never actually called from here.
 class _BuildingPhotosBlock extends StatefulWidget {
   const _BuildingPhotosBlock({required this.order});
   final Order order;
@@ -826,15 +890,75 @@ class _BuildingPhotosBlock extends StatefulWidget {
 }
 
 class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
-  bool _capturing = false;
+  final _repo = OrderRepository();
   final _noteCtrl = TextEditingController();
-  final List<Map<String, String>> _photos = [];
+  List<BuildingPhoto> _photos = [];
+  bool _loading = true;
+  bool _capturing = false;
+  bool _uploading = false;
+  File? _pickedFile;
 
-  void _submit() => setState(() {
-    _photos.add({'note': _noteCtrl.text.trim().isEmpty ? context.tr('buildingPhoto') : _noteCtrl.text.trim(), 'by': context.tr('you')});
-    _capturing = false;
+  @override
+  void initState() {
+    super.initState();
+    _loadPhotos();
+  }
+
+  Future<void> _loadPhotos() async {
+    try {
+      final photos = await _repo.fetchBuildingPhotos(widget.order.co ?? widget.order.id);
+      if (!mounted) return;
+      setState(() { _photos = photos; _loading = false; });
+    } catch (e) {
+      debugPrint('[BuildingPhotos] fetch failed: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _pickPhoto() async {
+    setState(() => _capturing = true);
+    try {
+      final file = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+      if (file == null) { setState(() => _capturing = false); return; } // driver backed out of the camera
+      setState(() => _pickedFile = File(file.path));
+    } catch (_) {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  Future<void> _submit() async {
+    final file = _pickedFile;
+    if (file == null) return;
+    setState(() => _uploading = true);
+    try {
+      // customer_id is OPTIONAL and meant to scope a photo to a specific
+      // customer (so it resurfaces on THEIR future orders, not just this
+      // one). order.id would be wrong here — it identifies this single
+      // delivery, not the customer, and changes every order. There's no
+      // real customer identifier anywhere in the order data the app
+      // receives (only a name + phone), so this is left unset rather than
+      // sending a misleading value under that field name. If backend wants
+      // real per-customer tracking to work, order.phone is the most
+      // stable customer-identity proxy available — worth asking them.
+      await _repo.uploadBuildingPhoto(widget.order.co ?? widget.order.id, file.path);
+      if (!mounted) return;
+      setState(() { _capturing = false; _pickedFile = null; _uploading = false; });
+      _noteCtrl.clear();
+      await _loadPhotos(); // refresh with the real uploaded photo from the server
+      if (mounted) showWToast(context, '📷 Photo shared with other drivers');
+    } catch (e) {
+      debugPrint('[BuildingPhotos] upload failed: $e');
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      showWToast(context, "Couldn't upload the photo — please try again");
+    }
+  }
+
+  void _cancel() {
+    setState(() { _capturing = false; _pickedFile = null; });
     _noteCtrl.clear();
-  });
+  }
 
   @override
   Widget build(BuildContext context) => Container(
@@ -858,29 +982,47 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
         ],
       ]),
       const SizedBox(height: 10),
-      if (_photos.isNotEmpty)
-        SizedBox(height: 120, child: ListView.separated(
+      if (_loading)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20),
+          child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))),
+        )
+      else if (_photos.isNotEmpty)
+        SizedBox(height: 130, child: ListView.separated(
           scrollDirection: Axis.horizontal, itemCount: _photos.length,
           separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (_, i) => Container(
-            width: 110, padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: WTheme.cloud, width: 1.5)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(height: 70, decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [WTheme.cloud, WTheme.aqua.withOpacity(0.20)]),
-                  borderRadius: BorderRadius.circular(8)),
-                  child: const Center(child: Text('📷', style: TextStyle(fontSize: 32)))),
-              const SizedBox(height: 4),
-              Text(_photos[i]['note']!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w700, color: WTheme.navy)),
-              Text('${context.tr('byPrefix')} ${_photos[i]['by']}', style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted)),
-            ]),
-          ),
+          itemBuilder: (_, i) {
+            final photo = _photos[i];
+            return Container(
+              width: 100, padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: WTheme.cloud, width: 1.5)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(photo.url, height: 90, width: 90, fit: BoxFit.cover,
+                      loadingBuilder: (_, child, progress) => progress == null ? child : Container(
+                          height: 90, width: 90, color: WTheme.cloud,
+                          child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))),
+                      errorBuilder: (_, __, ___) => Container(
+                          height: 90, width: 90, color: WTheme.cloud,
+                          child: const Center(child: Text('📷', style: TextStyle(fontSize: 26))))),
+                ),
+                if (photo.by != null) ...[
+                  const SizedBox(height: 3),
+                  Text('${context.tr('byPrefix')} ${photo.by}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.dmSans(fontSize: 9, fontWeight: FontWeight.w700, color: WTheme.navy)),
+                ],
+                if (photo.note != null && photo.note!.trim().isNotEmpty)
+                  Text(photo.note!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted)),
+              ]),
+            );
+          },
         ))
       else
         Container(
-          width: double.infinity, margin: const EdgeInsets.only(bottom: 12),
+          width: double.infinity,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(10),
               border: Border.all(color: WTheme.cloud)),
@@ -889,15 +1031,20 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
               style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center)),
         ),
+      const SizedBox(height: 12),
       if (_capturing)
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(12),
               border: Border.all(color: WTheme.aqua, width: 1.5)),
           child: Column(children: [
-            Container(height: 140, width: double.infinity,
-                decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(10)),
-                child: const Center(child: Text('📷', style: TextStyle(fontSize: 40)))),
+            if (_pickedFile != null)
+              ClipRRect(borderRadius: BorderRadius.circular(10),
+                  child: Image.file(_pickedFile!, height: 140, width: double.infinity, fit: BoxFit.cover))
+            else
+              Container(height: 140, width: double.infinity,
+                  decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(10)),
+                  child: const Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)))),
             const SizedBox(height: 10),
             TextField(controller: _noteCtrl,
                 style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.navy),
@@ -911,21 +1058,25 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
                 )),
             const SizedBox(height: 10),
             Row(children: [
-              Expanded(child: GestureDetector(onTap: () => setState(() => _capturing = false),
+              Expanded(child: GestureDetector(onTap: _uploading ? null : _cancel,
                   child: Container(padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(10)),
                       child: Center(child: Text(context.tr('cancel'), style: GoogleFonts.dmSans(color: WTheme.navy, fontWeight: FontWeight.w800, fontSize: 12)))))),
               const SizedBox(width: 8),
-              Expanded(flex: 2, child: GestureDetector(onTap: _submit,
+              Expanded(flex: 2, child: GestureDetector(onTap: (_pickedFile != null && !_uploading) ? _submit : null,
                   child: Container(padding: const EdgeInsets.symmetric(vertical: 10),
-                      decoration: BoxDecoration(color: WTheme.ok, borderRadius: BorderRadius.circular(10),
-                          boxShadow: [BoxShadow(color: WTheme.ok.withOpacity(0.4), blurRadius: 14, offset: const Offset(0, 6))]),
-                      child: Center(child: Text(context.tr('saveAndShare'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)))))),
+                      decoration: BoxDecoration(
+                          color: (_pickedFile != null) ? WTheme.ok : WTheme.cloud,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: (_pickedFile != null) ? [BoxShadow(color: WTheme.ok.withOpacity(0.4), blurRadius: 14, offset: const Offset(0, 6))] : null),
+                      child: Center(child: _uploading
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : Text(context.tr('saveAndShare'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)))))),
             ]),
           ]),
         )
       else
-        GestureDetector(onTap: () => setState(() => _capturing = true),
+        GestureDetector(onTap: _pickPhoto,
             child: Container(
                 width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),

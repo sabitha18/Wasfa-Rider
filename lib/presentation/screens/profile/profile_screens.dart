@@ -569,7 +569,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
               _Field(label: context.tr('fullNameAr'), value: _data['arabicName'] ?? '',
                   onChange: (v) => setState(() => _data['arabicName'] = v)),
               _DateField(label: context.tr('dobLabel'), value: _data['dob'] ?? '', onTap: () => _pickDate('dob')),
-              _Picker(label: context.tr('nationalityLabel'), value: _data['nationality'] ?? '',
+              _SearchablePicker(label: context.tr('nationalityLabel'), value: _data['nationality'] ?? '',
                   options: ['Kuwaiti','Egyptian','Indian','Bangladeshi','Pakistani','Filipino','Syrian','Jordanian','Lebanese','Other'],
                   onChange: (v) => setState(() => _data['nationality'] = v)),
               _Field(label: context.tr('civilIdLabel'), value: _data['civilId'] ?? '',
@@ -615,10 +615,35 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
               Text('HOME ADDRESS', style: GoogleFonts.dmSans(
                   fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
               const SizedBox(height: 6),
-              _Field(label: context.tr('areaLabel'), value: '', onChange: (_) {}),
-              _Field(label: context.tr('blockLabel'), value: '', onChange: (_) {}),
-              _Field(label: context.tr('streetLabel'), value: '', onChange: (_) {}),
-              _Field(label: context.tr('houseBuildingLabel'), value: '', onChange: (_) {}),
+              // Area/Block/Street/House were previously disconnected stubs
+              // (value: '', onChange: (_) {}) — anything typed here was
+              // silently thrown away, and _load()'s home_area/home_block/
+              // etc. values from the server were never even shown. Now
+              // properly wired to _passthrough, which is what actually
+              // gets sent back on save.
+              _SearchablePicker(label: context.tr('areaLabel'), value: _passthrough['home_area'] ?? '',
+                  options: const [
+                    // Kuwait City / Capital Governorate
+                    'Sharq','Mirqab','Dasman','Qibla','Salhiya','Bneid Al-Gar','Shuwaikh','Shamiya',
+                    'Faiha','Qadsiya','Nuzha','Adailiya','Khaldiya','Rawda','Yarmouk','Surra','Qortuba','Kaifan',
+                    // Hawalli Governorate
+                    'Hawalli','Salmiya','Salwa','Bayan','Mishref','Rumaithiya','Jabriya','Shaab','Shuhada','Zahra',
+                    // Farwaniya Governorate
+                    'Farwaniya','Khaitan','Jleeb Al-Shuyoukh','Ardiya','Rabiya','Andalous','Omariya','Riggae','Abraq Khaitan','Ferdous','Dajeej',
+                    // Ahmadi Governorate
+                    'Fahaheel','Mangaf','Mahboula','Abu Halifa','Fintas','Riqqa','Ahmadi','Sabahiya','Egaila','Hadiya','Wafra',
+                    // Jahra Governorate
+                    'Jahra','Naeem','Qasr','Sulaibiya','Waha','Oyoun',
+                    // Mubarak Al-Kabeer Governorate
+                    'Mubarak Al-Kabeer','Qurain','Adan','Sabah Al-Salem','Messila','Funaitees',
+                  ],
+                  onChange: (v) => setState(() => _passthrough['home_area'] = v)),
+              _Field(label: context.tr('blockLabel'), value: _passthrough['home_block'] ?? '',
+                  onChange: (v) => setState(() => _passthrough['home_block'] = v)),
+              _Field(label: context.tr('streetLabel'), value: _passthrough['home_street'] ?? '',
+                  onChange: (v) => setState(() => _passthrough['home_street'] = v)),
+              _Field(label: context.tr('houseBuildingLabel'), value: _passthrough['home_building'] ?? '',
+                  onChange: (v) => setState(() => _passthrough['home_building'] = v)),
             ]),
 
             // Emergency
@@ -655,7 +680,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
 
             // Bank
             _Section(icon: Icons.account_balance, iconColor: WTheme.ok, title: context.tr('bankAccountSection'), children: [
-              _Picker(label: context.tr('bankLabel'), value: _data['bankName'] ?? '',
+              _SearchablePicker(label: context.tr('bankLabel'), value: _data['bankName'] ?? '',
                   options: ['NBK','KFH','Boubyan','CBK','Gulf Bank','Burgan','Warba','Ahli United','ABK','Other'],
                   onChange: (v) => setState(() => _data['bankName'] = v)),
               _Field(label: context.tr('ibanLabel'), value: _data['bankIban'] ?? '', onChange: (v) => setState(() => _data['bankIban'] = v)),
@@ -702,7 +727,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
               child: Center(child: _saving
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
                   : Text('💾 SAVE PROFILE', style: GoogleFonts.dmSans(
-                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.4))),
+                  color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.4))),
             ),
           ),
         ),
@@ -854,6 +879,151 @@ class _Picker extends StatelessWidget {
       ),
     ]),
   );
+}
+
+// ── Searchable picker — same look as _Picker, but opens a bottom sheet
+// with a search box instead of a plain dropdown list. Used for lists long
+// enough that scrolling a plain dropdown is painful (areas, banks, etc).
+class _SearchablePicker extends StatelessWidget {
+  const _SearchablePicker({required this.label, required this.value, required this.options, required this.onChange});
+  final String label, value;
+  final List<String> options;
+  final ValueChanged<String> onChange;
+
+  Future<void> _open(BuildContext context) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _SearchablePickerSheet(title: label, options: options, initialValue: value),
+    );
+    if (selected != null) onChange(selected);
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label.toUpperCase(), style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
+      const SizedBox(height: 4),
+      GestureDetector(
+        onTap: () => _open(context),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: WTheme.blush.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: WTheme.cloud, width: 1.5),
+          ),
+          child: Row(children: [
+            Expanded(child: Text(value.isNotEmpty ? value : '— Select —', style: GoogleFonts.dmSans(
+                fontSize: 13, fontWeight: FontWeight.w600,
+                color: value.isNotEmpty ? WTheme.navy : WTheme.muted))),
+            Icon(Icons.search, size: 18, color: WTheme.sky),
+          ]),
+        ),
+      ),
+    ]),
+  );
+}
+
+class _SearchablePickerSheet extends StatefulWidget {
+  const _SearchablePickerSheet({required this.title, required this.options, required this.initialValue});
+  final String title;
+  final List<String> options;
+  final String initialValue;
+
+  @override
+  State<_SearchablePickerSheet> createState() => _SearchablePickerSheetState();
+}
+
+class _SearchablePickerSheetState extends State<_SearchablePickerSheet> {
+  final _searchCtrl = TextEditingController();
+  late List<String> _filtered = widget.options;
+
+  void _onSearchChanged(String q) {
+    setState(() {
+      _filtered = q.isEmpty
+          ? widget.options
+          : widget.options.where((o) => o.toLowerCase().contains(q.toLowerCase())).toList();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 10),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(4))),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
+            child: Align(alignment: Alignment.centerLeft, child: Text(widget.title,
+                style: GoogleFonts.dmSans(fontSize: 15, fontWeight: FontWeight.w800, color: WTheme.navy))),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              onChanged: _onSearchChanged,
+              style: GoogleFonts.dmSans(fontSize: 14, color: WTheme.navy),
+              decoration: InputDecoration(
+                hintText: 'Search…',
+                hintStyle: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13),
+                prefixIcon: Icon(Icons.search, size: 18, color: WTheme.muted),
+                filled: true, fillColor: WTheme.blush.withOpacity(0.5),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: WTheme.cloud, width: 1.5)),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: WTheme.cloud, width: 1.5)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: WTheme.sky, width: 2)),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Divider(height: 1, color: WTheme.cloud),
+          Flexible(
+            child: _filtered.isEmpty
+                ? Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text('No matches', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13)),
+            )
+                : ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              itemCount: _filtered.length,
+              itemBuilder: (ctx, i) {
+                final o = _filtered[i];
+                final selected = o == widget.initialValue;
+                return ListTile(
+                  title: Text(o, style: GoogleFonts.dmSans(
+                      fontSize: 14, fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                      color: selected ? WTheme.rose : WTheme.navy)),
+                  trailing: selected ? Icon(Icons.check, color: WTheme.rose, size: 18) : null,
+                  onTap: () => Navigator.pop(context, o),
+                );
+              },
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 10),
+        ]),
+      ),
+    );
+  }
 }
 
 // ── Document upload slot ────────────────────────────────────────

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/core/constants/app_strings.dart';
 import 'package:wasfa_rider/data/models/models.dart';
+import 'package:wasfa_rider/data/repositories/order_repository.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
+import 'package:wasfa_rider/presentation/viewmodels/map_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 
@@ -21,10 +24,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final GlobalKey<_HomeMapState> _mapKey = GlobalKey<_HomeMapState>();
+
   @override
   Widget build(BuildContext context) {
     final appVM = context.watch<AppViewModel>();
     final ordersVM = context.watch<OrdersViewModel>();
+    final mapVM = context.watch<MapViewModel>();
     final driver = appVM.driver;
     final active = ordersVM.activeOrder;
     final hasMultipleStops = ordersVM.orders
@@ -42,25 +48,28 @@ class _HomeScreenState extends State<HomeScreen> {
         Expanded(
           child: Stack(children: [
             Positioned.fill(
-              child: InteractiveViewer(
-                minScale: 0.8,
-                maxScale: 4.0,
-                boundaryMargin: const EdgeInsets.all(200),
-                child: _MapBg(
-                  orders: ordersVM.orders,
-                  onPinTap: (id) => ordersVM.switchActive(id),
-                ),
+              child: _HomeMap(
+                key: _mapKey,
+                orders: ordersVM.orders,
+                onPinTap: (id) => ordersVM.switchActive(id),
               ),
             ),
             // FABs
             Positioned(
               top: 16, right: 14,
-              child: _fab(icon: Icons.my_location, onTap: () {}),
+              child: _fab(icon: Icons.my_location, onTap: () => _mapKey.currentState?.recenter()),
             ),
             Positioned(
               top: 80, right: 14,
               child: _fab(icon: Icons.sos, color: WTheme.err, iconColor: Colors.white, onTap: () {
                 showWToast(context, context.tr('emergencyDispatched'));
+              }),
+            ),
+            Positioned(
+              top: 144, right: 14,
+              child: _fab(icon: Icons.refresh, onTap: () async {
+                await ordersVM.refresh();
+                if (mounted) showWToast(context, 'Orders refreshed');
               }),
             ),
             // Tap-pin hint
@@ -81,6 +90,42 @@ class _HomeScreenState extends State<HomeScreen> {
                     Flexible(child: Text(context.tr('tapPinHint'),
                         style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.4))),
                   ]),
+                ),
+              ),
+            // Location error banner — only appears if GPS/permission actually
+            // failed (denied, disabled, etc.), surfaced from MapViewModel.error
+            // instead of silently leaving the rider dot missing.
+            if (mapVM.error != null)
+              Positioned(
+                top: hasMultipleStops ? 58 : 16, left: 14, right: 80,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: WTheme.err.withOpacity(0.94),
+                    borderRadius: BorderRadius.circular(999),
+                    boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.3), blurRadius: 14, offset: const Offset(0, 6))],
+                  ),
+                  child: Text(mapVM.error!,
+                      style: GoogleFonts.dmSans(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                ),
+              ),
+            // TEST-ONLY safeguard — impossible-to-miss badge so a faked
+            // driver location can never accidentally ship in a client build.
+            // Remove this whole block once kDebugFakeDriverLocation is gone.
+            if (mapVM.isFakingLocation)
+              Positioned(
+                bottom: 100, left: 0, right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade800,
+                      borderRadius: BorderRadius.circular(999),
+                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 4))],
+                    ),
+                    child: const Text('🧪 TEST LOCATION ACTIVE — remove before release',
+                        style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
+                  ),
                 ),
               ),
             // Active order card — always fully expanded, matches HTML
@@ -128,236 +173,137 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ── Stylized map background — recreates the HTML's MapBg exactly ──
-// Grid pattern + diagonal "roads" + pulsing rider dot + teardrop pins,
-// positioned via each order's pinPos (left/top fractions of the viewport).
-class _MapBg extends StatefulWidget {
-  const _MapBg({required this.orders, required this.onPinTap});
+// ── Live map — real Google Map with the rider's actual GPS position and
+// each stop's real address pin (resolved via GET /geocode/{co}), replacing
+// the old stylized grid illustration. The client needs the rider's real
+// location shown, not a mock background.
+//
+// Order pins here come from the same on-demand geocode endpoint the
+// full-screen InAppMapScreen uses — Order.pinPos (left/top fractions) was
+// only ever meant for the old fake map and has no relation to real
+// coordinates, so it's not used for placement anymore.
+class _HomeMap extends StatefulWidget {
+  const _HomeMap({super.key, required this.orders, required this.onPinTap});
   final List<Order> orders;
   final ValueChanged<String> onPinTap;
 
   @override
-  State<_MapBg> createState() => _MapBgState();
+  State<_HomeMap> createState() => _HomeMapState();
 }
 
-class _MapBgState extends State<_MapBg> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulseCtrl;
+class _HomeMapState extends State<_HomeMap> {
+  GoogleMapController? _controller;
+  final _orderRepo = OrderRepository();
+  final Map<String, LatLng> _pins = {};  // orderId -> resolved coordinate
+  final Set<String> _requested = {};     // orderIds already geocoded (or attempted)
+  bool _didInitialFit = false;
 
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    context.read<MapViewModel>().startTracking();
+    _geocodeVisibleOrders();
   }
 
   @override
-  void dispose() {
-    _pulseCtrl.dispose();
-    super.dispose();
+  void didUpdateWidget(covariant _HomeMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _geocodeVisibleOrders(); // pick up any newly-added stops (e.g. accepted batch)
   }
 
-  Color _pinColor(OrderStatus status) {
-    switch (status) {
-      case OrderStatus.done: return WTheme.ok;
-      case OrderStatus.active: return WTheme.rose;
-      case OrderStatus.next: return WTheme.navy;
-      case OrderStatus.later: return WTheme.sky;
-      case OrderStatus.failed: return WTheme.err;
-      default: return WTheme.sky;
+  void _geocodeVisibleOrders() {
+    for (final o in widget.orders) {
+      if (o.status == OrderStatus.failed) continue;
+      if (_requested.contains(o.id)) continue;
+      _requested.add(o.id);
+      _resolveOrder(o);
     }
+  }
+
+  Future<void> _resolveOrder(Order o) async {
+    try {
+      final result = await _orderRepo.geocodeOrder(o.co ?? o.id);
+      if (!mounted || result == null) {
+        debugPrint('[HomeMap] geocode for order ${o.id} (co=${o.co}) returned null — no pin will show');
+        return;
+      }
+      debugPrint('[HomeMap] geocode for order ${o.id} (co=${o.co}) -> lat=${result.lat}, lng=${result.lng}');
+      setState(() => _pins[o.id] = LatLng(result.lat, result.lng));
+    } catch (e) {
+      // Background enhancement only — if a stop's address can't be
+      // geocoded it just won't get a pin here; it's still reachable from
+      // the order detail screen / its own quick-action map button.
+      debugPrint('[HomeMap] geocode FAILED for order ${o.id} (co=${o.co}): $e');
+    }
+  }
+
+  double _pinHue(OrderStatus s) {
+    switch (s) {
+      case OrderStatus.active: return BitmapDescriptor.hueRose;
+      case OrderStatus.next: return BitmapDescriptor.hueViolet;
+      case OrderStatus.later: return BitmapDescriptor.hueCyan;
+      case OrderStatus.done: return BitmapDescriptor.hueGreen;
+      default: return BitmapDescriptor.hueOrange;
+    }
+  }
+
+  /// Re-centers on the driver's current live position — wired to the
+  /// "my location" FAB in HomeScreen.
+  void recenter() {
+    final driver = context.read<MapViewModel>().driverPosition;
+    if (_controller == null || driver == null) return;
+    _controller!.animateCamera(CameraUpdate.newLatLngZoom(driver, 15));
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final w = constraints.maxWidth;
-      final h = constraints.maxHeight;
-      return Stack(children: [
-        // Base background
-        Container(color: const Color(0xFFF1F6FA)),
-        // Grid lines
-        CustomPaint(size: Size(w, h), painter: _GridPainter()),
-        // Diagonal "roads"
-        Positioned(
-          top: h * 0.15, left: -w * 0.05, right: -w * 0.05,
-          child: Transform.rotate(
-            angle: -3 * 3.1415926 / 180,
-            child: Container(
-              height: 12,
-              decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 0, spreadRadius: 1)]),
-            ),
-          ),
-        ),
-        Positioned(
-          top: h * 0.55, left: -w * 0.05, right: -w * 0.05,
-          child: Transform.rotate(
-            angle: 2 * 3.1415926 / 180,
-            child: Container(
-              height: 12,
-              decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 0, spreadRadius: 1)]),
-            ),
-          ),
-        ),
-        Positioned(
-          top: h * 0.10, bottom: h * 0.30, left: w * 0.30,
-          child: Transform.rotate(
-            angle: 4 * 3.1415926 / 180,
-            child: Container(
-              width: 12,
-              decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 0, spreadRadius: 1)]),
-            ),
-          ),
-        ),
-        // Rider self — pulsing aqua dot (no Opacity widget — avoids dark compositing layer on Android)
-        Positioned(
-          left: w * 0.5 - 50, top: h * 0.35 - 50,
-          child: AnimatedBuilder(
-            animation: _pulseCtrl,
-            builder: (context, _) {
-              final t = _pulseCtrl.value;
-              return CustomPaint(
-                size: const Size(100, 100),
-                painter: _RiderDotPainter(
-                  aqua: WTheme.aqua,
-                  ringOpacity: (1 - t).clamp(0.0, 1.0),
-                  ringRadius: (11 + (32 * t)).clamp(0.0, 50.0),
-                ),
-              );
-            },
-          ),
-        ),
-        // Order pins — teardrop shape via 45° rotated rounded square
-        ...widget.orders.where((o) => o.status != OrderStatus.done && o.status != OrderStatus.failed).map((o) {
-          final isActive = o.status == OrderStatus.active;
-          final size = isActive ? 40.0 : 30.0;
-          final left = w * o.pinPos.leftFraction - size / 2;
-          final top = h * o.pinPos.topFraction - size / 2;
-          return Positioned(
-            left: left, top: top,
-            child: GestureDetector(
-              onTap: !isActive ? () => widget.onPinTap(o.id) : null,
-              child: Transform.rotate(
-                angle: -45 * 3.1415926 / 180,
-                child: Container(
-                  width: size, height: size,
-                  decoration: BoxDecoration(
-                    color: _pinColor(o.status),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(size / 2),
-                      topRight: Radius.circular(size / 2),
-                      bottomLeft: Radius.circular(size / 2),
-                      bottomRight: Radius.zero,
-                    ),
-                    boxShadow: isActive
-                        ? [
-                      BoxShadow(color: WTheme.rose.withOpacity(0.5), blurRadius: 18, offset: const Offset(0, 6)),
-                    ]
-                        : [BoxShadow(color: WTheme.navy.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 4))],
-                  ),
-                  child: Center(
-                    child: Transform.rotate(
-                      angle: 45 * 3.1415926 / 180,
-                      child: Text('${o.stopNumber}',
-                          style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }),
-        // Also show done pins (checkmark)
-        ...widget.orders.where((o) => o.status == OrderStatus.done).map((o) {
-          const size = 30.0;
-          final left = w * o.pinPos.leftFraction - size / 2;
-          final top = h * o.pinPos.topFraction - size / 2;
-          return Positioned(
-            left: left, top: top,
-            child: Transform.rotate(
-              angle: -45 * 3.1415926 / 180,
-              child: Container(
-                width: size, height: size,
-                decoration: BoxDecoration(
-                  color: WTheme.ok,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(size / 2),
-                    topRight: Radius.circular(size / 2),
-                    bottomLeft: Radius.circular(size / 2),
-                    bottomRight: Radius.zero,
-                  ),
-                  boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 4))],
-                ),
-                child: Center(
-                  child: Transform.rotate(
-                    angle: 45 * 3.1415926 / 180,
-                    child: const Text('✓', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }),
-      ]);
-    });
-  }
-}
+    final driver = context.watch<MapViewModel>().driverPosition;
 
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = WTheme.navy.withOpacity(0.06)
-      ..strokeWidth = 1;
-    const step = 30.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    // The moment we get a real GPS fix, snap the camera to it once rather
+    // than sitting on the default Kuwait-city fallback center.
+    if (driver != null && !_didInitialFit && _controller != null) {
+      _didInitialFit = true;
+      _controller!.animateCamera(CameraUpdate.newLatLngZoom(driver, 15));
     }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
+
+    final markers = <Marker>{
+      if (driver != null)
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: driver,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: const InfoWindow(title: 'You'),
+          zIndex: 2,
+        ),
+      for (final o in widget.orders)
+        if (o.status != OrderStatus.failed && _pins[o.id] != null)
+          Marker(
+            markerId: MarkerId(o.id),
+            position: _pins[o.id]!,
+            icon: BitmapDescriptor.defaultMarkerWithHue(_pinHue(o.status)),
+            infoWindow: InfoWindow(title: 'Stop ${o.stopNumber} — ${o.patient}', snippet: o.addr1),
+            onTap: o.status == OrderStatus.active ? null : () => widget.onPinTap(o.id),
+          ),
+    };
+
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(
+        target: driver ?? MapViewModel.kuwaitCity,
+        zoom: 14,
+      ),
+      markers: markers,
+      myLocationEnabled: false, // we draw our own styled "You" marker above
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      onMapCreated: (c) => _controller = c,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// Draws the rider dot + pulsing ring entirely in canvas — no Opacity widget,
-// no Border widget, no transparent Container — zero compositing artifacts on Android.
-class _RiderDotPainter extends CustomPainter {
-  const _RiderDotPainter({
-    required this.aqua,
-    required this.ringOpacity,
-    required this.ringRadius,
-  });
-  final Color aqua;
-  final double ringOpacity;
-  final double ringRadius;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-
-    // Pulse ring — drawn first (behind dot)
-    if (ringOpacity > 0) {
-      canvas.drawCircle(
-        center,
-        ringRadius,
-        Paint()
-          ..color = aqua.withOpacity(ringOpacity * 0.45)
-          ..strokeWidth = 1.5
-          ..style = PaintingStyle.stroke,
-      );
-    }
-
-    // White border circle
-    canvas.drawCircle(center, 15, Paint()..color = Colors.white);
-
-    // Aqua fill dot
-    canvas.drawCircle(center, 11, Paint()..color = aqua);
+  void dispose() {
+    context.read<MapViewModel>().stopTracking();
+    super.dispose();
   }
-
-  @override
-  bool shouldRepaint(_RiderDotPainter old) =>
-      old.ringOpacity != ringOpacity || old.ringRadius != ringRadius;
 }
 
 class _ActiveOrderCard extends StatefulWidget {

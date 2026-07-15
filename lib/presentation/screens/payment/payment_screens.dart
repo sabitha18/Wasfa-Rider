@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -92,19 +94,28 @@ class PaymentScreen extends StatelessWidget {
                   ),
                 ]),
               ),
-              // Payment options — all 3 always shown matching HTML
-              _PayOption(
-                emoji: '💵', label: context.tr('cashLabel'), desc: context.tr('collectCashNow'),
-                color: WTheme.warn, onTap: onCollectCash,
-              ),
-              _PayOption(
-                emoji: '💳', label: context.tr('knetLabel'), desc: context.tr('cardAtDoor'),
-                color: WTheme.sky, onTap: onCollectKnet,
-              ),
-              _PayOption(
-                emoji: '🔗', label: context.tr('sendPaymentLink'), desc: context.tr('whatsappCheckout'),
-                color: WTheme.ok, onTap: onSendLink,
-              ),
+              // URGENT FIX (client-reported): previously all 3 options
+              // showed regardless of the order's actual payment method —
+              // meaning a CASH order could be "confirmed paid" by tapping
+              // KNET or Send Link instead, both of which skip straight
+              // past ever confirming physical cash was collected. Now
+              // only the option matching the order's real payMethod shows,
+              // so a cash order can only ever be resolved by clicking Cash.
+              if (order.payMethod == PayMethod.cash)
+                _PayOption(
+                  emoji: '💵', label: context.tr('cashLabel'), desc: context.tr('collectCashNow'),
+                  color: WTheme.warn, onTap: onCollectCash,
+                )
+              else if (order.payMethod == PayMethod.knet)
+                _PayOption(
+                  emoji: '💳', label: context.tr('knetLabel'), desc: context.tr('cardAtDoor'),
+                  color: WTheme.sky, onTap: onCollectKnet,
+                )
+              else
+                _PayOption(
+                  emoji: '🔗', label: context.tr('sendPaymentLink'), desc: context.tr('whatsappCheckout'),
+                  color: WTheme.ok, onTap: onSendLink,
+                ),
             ]),
           )),
         ]),
@@ -404,81 +415,130 @@ class PhotoPODScreen extends StatefulWidget {
 }
 
 class _PhotoPODScreenState extends State<PhotoPODScreen> {
-  bool _captured = false;
+  File? _pickedFile; // the captured/picked photo, shown back for review before confirming
   bool _capturing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Launch the real device camera immediately — the branded door/Rx-bag
+    // screen behind it is just a backdrop while the OS camera is opening,
+    // not a step the driver should have to tap through to get to the camera.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _capture());
+  }
 
   // NOTE: this used to be entirely fake (setState + a delay, no real photo
   // at all) even though the visual mock behind it looks like a live camera.
   // The backend's POST /orders/{co}/finish now CONFIRMED requires a real
-  // pod_photo file, so this now actually opens the device camera via
-  // image_picker (same approach used for profile document uploads) and
-  // passes the real file path up. The door/Rx-bag graphic is still just a
-  // decorative backdrop, not a live viewfinder — building an actual camera
-  // preview would need the `camera` package instead of image_picker.
+  // pod_photo file, so this opens the device camera via image_picker (same
+  // approach used for profile document uploads). The captured photo is now
+  // shown back to the driver as a real preview (Image.file) with Retake /
+  // Use Photo controls, instead of firing straight through to onCaptured
+  // with no chance to review what was captured.
   Future<void> _capture() async {
     if (_capturing) return;
     setState(() => _capturing = true);
     try {
       final file = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
-      if (file == null) { setState(() => _capturing = false); return; }
-      setState(() => _captured = true);
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (mounted) widget.onCaptured(file.path);
+      setState(() {
+        _capturing = false;
+        if (file != null) _pickedFile = File(file.path);
+      });
     } catch (_) {
       if (mounted) setState(() => _capturing = false);
     }
   }
 
+  /// Gallery button — was purely decorative before (no onTap at all).
+  Future<void> _pickFromGallery() async {
+    if (_capturing) return;
+    setState(() => _capturing = true);
+    try {
+      final file = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
+      setState(() {
+        _capturing = false;
+        if (file != null) _pickedFile = File(file.path);
+      });
+    } catch (_) {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  void _confirmPhoto() {
+    if (_pickedFile != null) widget.onCaptured(_pickedFile!.path);
+  }
+
+  void _retake() {
+    setState(() => _pickedFile = null);
+    _capture();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasPreview = _pickedFile != null;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(children: [
-        // Camera viewfinder background
-        Container(
-          decoration: const BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -0.2),
-              radius: 1.2,
-              colors: [Color(0xFF2a3340), Color(0xFF0f1419)],
+        if (hasPreview)
+        // Real captured/picked photo, shown full-screen for review
+          Positioned.fill(child: Image.file(_pickedFile!, fit: BoxFit.cover))
+        else ...[
+          // Camera viewfinder backdrop — decorative; the OS camera app
+          // itself is what actually opens (see _capture above)
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0, -0.2),
+                radius: 1.2,
+                colors: [Color(0xFF2a3340), Color(0xFF0f1419)],
+              ),
             ),
           ),
-        ),
-        // Door scene mock (matches HTML)
-        Positioned(
-          top: MediaQuery.of(context).size.height * 0.18,
-          left: MediaQuery.of(context).size.width / 2 - 90,
-          child: Container(
-            width: 180, height: 280,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                  colors: [Color(0xFF4a3324), Color(0xFF2e1f15)]),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF1a1108), width: 4),
-              boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 60, offset: Offset(0, 20))],
+          // Door scene mock (matches HTML)
+          Positioned(
+            top: MediaQuery.of(context).size.height * 0.18,
+            left: MediaQuery.of(context).size.width / 2 - 90,
+            child: Container(
+              width: 180, height: 280,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                    colors: [Color(0xFF4a3324), Color(0xFF2e1f15)]),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF1a1108), width: 4),
+                boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 60, offset: Offset(0, 20))],
+              ),
             ),
           ),
-        ),
-        // Rx bag on doorstep
-        Positioned(
-          top: MediaQuery.of(context).size.height * 0.52,
-          left: MediaQuery.of(context).size.width / 2 - 55,
-          child: Container(
-            width: 110, height: 90,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  colors: [Color(0xFFF6E8D4), Color(0xFFD4B993)]),
-              borderRadius: BorderRadius.circular(6),
-              boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 30, offset: Offset(0, 10))],
+          // Rx bag on doorstep
+          Positioned(
+            top: MediaQuery.of(context).size.height * 0.52,
+            left: MediaQuery.of(context).size.width / 2 - 55,
+            child: Container(
+              width: 110, height: 90,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+                    colors: [Color(0xFFF6E8D4), Color(0xFFD4B993)]),
+                borderRadius: BorderRadius.circular(6),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 30, offset: Offset(0, 10))],
+              ),
+              child: Center(child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: WTheme.rose, borderRadius: BorderRadius.circular(4)),
+                child: Text('Rx', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11)),
+              )),
             ),
-            child: Center(child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: WTheme.rose, borderRadius: BorderRadius.circular(4)),
-              child: Text('Rx', style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11)),
-            )),
           ),
-        ),
-        // Top bar: close + flash
+          // Aqua corner brackets
+          Positioned(
+            top: MediaQuery.of(context).size.height * 0.25,
+            left: MediaQuery.of(context).size.width / 2 - 130,
+            child: SizedBox(
+              width: 260, height: 300,
+              child: CustomPaint(painter: _CornerBracketsPainter(color: WTheme.aqua)),
+            ),
+          ),
+        ],
+        // Top bar: close + flash (flash only makes sense pre-capture)
         Positioned(
           top: MediaQuery.of(context).padding.top + 20,
           left: 16, right: 16,
@@ -491,11 +551,12 @@ class _PhotoPODScreenState extends State<PhotoPODScreen> {
                 child: const Center(child: Text('✕', style: TextStyle(color: Colors.white, fontSize: 18))),
               ),
             ),
-            Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-              child: const Center(child: Text('⚡', style: TextStyle(fontSize: 18))),
-            ),
+            if (!hasPreview)
+              Container(
+                width: 38, height: 38,
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                child: const Center(child: Text('⚡', style: TextStyle(fontSize: 18))),
+              ),
           ]),
         ),
         // Instruction card
@@ -510,7 +571,7 @@ class _PhotoPODScreenState extends State<PhotoPODScreen> {
               boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 30, offset: Offset(0, 10))],
             ),
             child: Column(children: [
-              Text(context.tr('photoOfMedication'),
+              Text(hasPreview ? 'Review your photo' : context.tr('photoOfMedication'),
                   style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 13, color: WTheme.navy)),
               const SizedBox(height: 2),
               Text(context.tr('podStep1').replaceFirst('{id}', widget.order.id),
@@ -518,36 +579,23 @@ class _PhotoPODScreenState extends State<PhotoPODScreen> {
             ]),
           ),
         ),
-        // Aqua corner brackets
-        Positioned(
-          top: MediaQuery.of(context).size.height * 0.25,
-          left: MediaQuery.of(context).size.width / 2 - 130,
-          child: SizedBox(
-            width: 260, height: 300,
-            child: CustomPaint(painter: _CornerBracketsPainter(color: WTheme.aqua)),
-          ),
-        ),
-        // Flash effect
-        if (_captured)
-          Positioned.fill(child: IgnorePointer(
-            child: AnimatedOpacity(
-              opacity: 0,
-              duration: const Duration(milliseconds: 500),
-              child: Container(color: Colors.white),
-            ),
-          )),
         // Bottom controls
         Positioned(
           bottom: 30, left: 0, right: 0,
           child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-            Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-              child: const Center(child: Text('🖼', style: TextStyle(fontSize: 20))),
-            ),
-            // Shutter button
+            // Gallery picker — previously decorative only, now actually opens the gallery
             GestureDetector(
-              onTap: _capture,
+              onTap: _pickFromGallery,
+              child: Container(
+                width: 50, height: 50,
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                child: const Center(child: Text('🖼', style: TextStyle(fontSize: 20))),
+              ),
+            ),
+            // Center button: shutter (re-opens camera) before capture,
+            // checkmark (confirms this photo) once there's a preview
+            GestureDetector(
+              onTap: hasPreview ? _confirmPhoto : _capture,
               child: Container(
                 width: 80, height: 80,
                 decoration: BoxDecoration(
@@ -562,16 +610,33 @@ class _PhotoPODScreenState extends State<PhotoPODScreen> {
                         colors: [Color(0xFFE7609F), Color(0xFF1E9CD7)]),
                     shape: BoxShape.circle,
                   ),
+                  child: hasPreview ? const Icon(Icons.check, color: Colors.white, size: 30) : null,
                 )),
               ),
             ),
-            Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-              child: const Center(child: Text('🔄', style: TextStyle(fontSize: 20))),
+            // Retake — previously decorative only; only meaningful once
+            // there's an actual photo to retake, so it's inert before that
+            GestureDetector(
+              onTap: hasPreview ? _retake : null,
+              child: Container(
+                width: 50, height: 50,
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(hasPreview ? 0.5 : 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(child: Text('🔄', style: TextStyle(fontSize: 20))),
+              ),
             ),
           ]),
         ),
+        // Loading veil while the camera/gallery app is opening or returning
+        if (_capturing)
+          Positioned.fill(child: IgnorePointer(
+            child: Container(
+              color: Colors.black.withOpacity(0.35),
+              child: const Center(child: CircularProgressIndicator(color: Colors.white)),
+            ),
+          )),
       ]),
     );
   }
@@ -607,7 +672,12 @@ class _CornerBracketsPainter extends CustomPainter {
 class SignatureScreen extends StatefulWidget {
   const SignatureScreen({super.key, required this.order, required this.onBack, required this.onSigned});
   final Order order;
-  final VoidCallback onBack, onSigned;
+  final VoidCallback onBack;
+  // Was VoidCallback — the drawn signature was captured on-screen but never
+  // actually exported or sent anywhere, even though OrderRepository.finish()
+  // already accepts a signatureBase64 field. Now carries the real PNG
+  // (base64-encoded), or null when confirming via OTP mode instead.
+  final void Function(String? signatureBase64) onSigned;
 
   @override
   State<SignatureScreen> createState() => _SignatureScreenState();
@@ -632,6 +702,18 @@ class _SignatureScreenState extends State<SignatureScreen> {
   bool get _canConfirm => _mode == 'signature'
       ? _sig.isNotEmpty
       : _otpCtrls.every((c) => c.text.isNotEmpty);
+
+  /// Exports the actual drawn signature (when in signature mode) before
+  /// handing off — this used to just call widget.onSigned() directly with
+  /// nothing exported, silently throwing away the driver's drawing.
+  Future<void> _handleConfirm() async {
+    String? sigBase64;
+    if (_mode == 'signature' && _sig.isNotEmpty) {
+      final bytes = await _sig.toPngBytes();
+      if (bytes != null) sigBase64 = base64Encode(bytes);
+    }
+    widget.onSigned(sigBase64);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -716,7 +798,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 8, 18, 22),
           child: _canConfirm
-              ? SwipeToConfirm(label: context.tr('confirmDelivery'), color: WTheme.ok, onConfirm: widget.onSigned)
+              ? SwipeToConfirm(label: context.tr('confirmDelivery'), color: WTheme.ok, onConfirm: _handleConfirm)
               : Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 20),
@@ -812,9 +894,37 @@ class _SignatureScreenState extends State<SignatureScreen> {
                 focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
                     borderSide: const BorderSide(color: WTheme.rose, width: 2)),
               ),
+              // Tapping into an already-filled box selects its content, so
+              // typing a new digit cleanly replaces it instead of an
+              // ambiguous insert-then-truncate that could keep either digit.
+              onTap: () => _otpCtrls[i].selection =
+                  TextSelection(baseOffset: 0, extentOffset: _otpCtrls[i].text.length),
               onChanged: (v) {
-                if (v.isNotEmpty && i < 5) _otpNodes[i + 1].requestFocus();
-                if (v.isEmpty && i > 0) _otpNodes[i - 1].requestFocus();
+                // Defensive normalize: on some devices, a keystroke that
+                // arrives just as focus is shifting can leave more than one
+                // character in this field even with maxLength:1 set. Force
+                // it down to exactly the digit the driver typed last,
+                // rather than trusting maxLength alone to have picked the
+                // right one.
+                if (v.length > 1) {
+                  final last = v.substring(v.length - 1);
+                  _otpCtrls[i].value = TextEditingValue(
+                    text: last,
+                    selection: TextSelection.collapsed(offset: last.length),
+                  );
+                  v = last;
+                }
+                // Defer focus changes to the next frame — calling
+                // requestFocus() synchronously inside onChanged is what
+                // actually caused the garbled digits: it races with the
+                // Android IME, which can still be mid-delivery of this
+                // keystroke when focus jumps to the next box.
+                if (v.isNotEmpty && i < 5) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _otpNodes[i + 1].requestFocus());
+                }
+                if (v.isEmpty && i > 0) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _otpNodes[i - 1].requestFocus());
+                }
                 setState(() {});
               },
             )),

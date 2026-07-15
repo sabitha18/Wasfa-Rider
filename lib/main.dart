@@ -1,6 +1,10 @@
+import 'dart:async';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/constants/app_constants.dart';
+import 'core/notifications/notification_service.dart';
 import 'core/theme/app_theme.dart';
 import 'data/models/models.dart';
 import 'data/repositories/order_repository.dart';
@@ -17,8 +21,11 @@ import 'presentation/screens/payment/payment_screens.dart';
 import 'presentation/screens/batch/batch_screens.dart';
 import 'presentation/screens/profile/profile_screens.dart';
 import 'presentation/screens/earnings/earnings_screen.dart';
+import 'presentation/widgets/shared_widgets.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(
     MultiProvider(
       providers: [
@@ -104,12 +111,51 @@ class _RiderShellState extends State<RiderShell> {
     _screen = 'map';
   });
 
+  StreamSubscription<void>? _pushRefreshSub;
+  StreamSubscription<String>? _orderTapSub;
+  String? _dismissedBatchId; // last batch offer the driver already accepted/rejected/let expire
+
   void _ensureOrdersLoaded() {
     if (_ordersLoaded) return;
     _ordersLoaded = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<OrdersViewModel>().load();
+      context.read<OrdersViewModel>().startAutoRefresh(); // silent poll for newly-assigned orders
+      context.read<OrdersViewModel>().startBatchPolling(); // tighter, dedicated poll for time-sensitive batch offers
+      NotificationService.instance.init(); // requests permission + registers FCM token with backend
+      _pushRefreshSub = NotificationService.instance.onNewOrderPush.listen((_) {
+        if (mounted) context.read<OrdersViewModel>().refresh();
+      });
+      _orderTapSub = NotificationService.instance.onOrderTapped.listen(_handleOrderNotificationTap);
+      NotificationService.instance.checkInitialMessage(); // was this app launch caused by tapping a push while fully closed?
     });
+  }
+
+  /// A push notification for a specific order was tapped (foreground,
+  /// backgrounded, or cold-start) — open that order's detail screen the
+  /// same way every other "open order" callback in this file does.
+  /// Guards against the order not being loaded yet (e.g. a push for a
+  /// brand-new assignment arriving before the next poll) by refreshing
+  /// first, and fails safe to the Orders tab instead of crashing on a
+  /// null order if it still can't be found afterwards.
+  Future<void> _handleOrderNotificationTap(String orderId) async {
+    final ordersVM = context.read<OrdersViewModel>();
+    if (ordersVM.findById(orderId) == null) {
+      await ordersVM.refresh();
+    }
+    if (!mounted) return;
+    if (ordersVM.findById(orderId) != null) {
+      setState(() { _selectedOrderId = orderId; _screen = 'orderDetail'; });
+    } else {
+      setState(() { _tab = 'orders'; _screen = 'orders'; });
+      scaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't find that order — showing your order list instead"),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -154,6 +200,10 @@ class _RiderShellState extends State<RiderShell> {
   @override
   void dispose() {
     context.read<OrdersViewModel>().removeListener(_showOrdersError);
+    context.read<OrdersViewModel>().stopAutoRefresh();
+    context.read<OrdersViewModel>().stopBatchPolling();
+    _pushRefreshSub?.cancel();
+    _orderTapSub?.cancel();
     super.dispose();
   }
 
@@ -176,7 +226,52 @@ class _RiderShellState extends State<RiderShell> {
 
     // Main app
     _ensureOrdersLoaded();
-    return _buildAppScreen();
+    // Watching here (not just read) so this rebuilds the instant a new
+    // batch offer appears from the 20s poll — the offer has a 15s
+    // countdown, so it needs to surface immediately, not wait for some
+    // unrelated rebuild to happen to notice it.
+    final pendingBatch = context.watch<OrdersViewModel>().pendingBatch;
+    final showBatchOffer = pendingBatch != null
+        && pendingBatch.id != null
+        && pendingBatch.id != _dismissedBatchId;
+    return PopScope(
+      // Only let the system back button actually exit the app when we're
+      // already at a tab's root screen. Otherwise intercept it — this app
+      // uses its own custom screen state machine (_screen/_goTo), not
+      // Flutter's real Navigator, so most screens are just conditional
+      // widget swaps rather than pushed routes. That meant the system
+      // back button previously found nothing to pop and just closed the
+      // app outright from ANY sub-screen (order detail, payment,
+      // signature, etc.) — nothing intercepted it before this.
+      canPop: _screen == _tab,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _goTo(_tab);
+      },
+      child: Stack(children: [
+        _buildAppScreen(),
+        if (showBatchOffer)
+          BatchIncomingScreen(
+            batch: pendingBatch,
+            onAccept: () => _handleBatchDecision(pendingBatch, accept: true),
+            onReject: () => _handleBatchDecision(pendingBatch, accept: false),
+          ),
+      ]),
+    );
+  }
+
+  /// Wired to BatchIncomingScreen's accept/reject/auto-timeout — this
+  /// screen and the backend calls behind it (acceptPendingBatch /
+  /// rejectPendingBatch) already existed as dead code before now; nothing
+  /// ever actually showed the offer or let the driver act on it.
+  Future<void> _handleBatchDecision(Batch batch, {required bool accept}) async {
+    setState(() => _dismissedBatchId = batch.id);
+    final ordersVM = context.read<OrdersViewModel>();
+    final ok = accept ? await ordersVM.acceptPendingBatch() : await ordersVM.rejectPendingBatch();
+    if (!mounted) return;
+    if (accept) {
+      showWToast(context, ok ? '📦 Batch accepted — added to your stops' : "Couldn't accept the batch — please try again");
+    }
   }
 
   Widget _buildAppScreen() {
@@ -193,11 +288,15 @@ class _RiderShellState extends State<RiderShell> {
             final order = ordersVM.findById(id);
             setState(() {
               _selectedOrderId = id;
-              if (order == null || order.paid) {
-                _screen = 'photo'; // already paid — skip to photo POD
-              } else {
-                _screen = 'payment'; // needs payment first
-              }
+              // URGENT FIX (client-reported): a cash order must NEVER skip
+              // straight to photo/signature just because order.paid says
+              // true — paid alone only means "already settled online"
+              // (knet/link), which is trustworthy from backend. Cash can
+              // ONLY be confirmed by the driver physically collecting it
+              // via CashAmountScreen — the paid flag being (correctly or
+              // incorrectly) true must never bypass that for a cash order.
+              final canSkipPayment = order != null && order.paid && order.payMethod != PayMethod.cash;
+              _screen = canSkipPayment ? 'photo' : 'payment';
             });
           },
         );
@@ -285,7 +384,7 @@ class _RiderShellState extends State<RiderShell> {
         return SignatureScreen(
           order: order,
           onBack: () => _goTo('photo'),
-          onSigned: () {
+          onSigned: (signatureBase64) {
             final methodStr = OrderRepository.methodForOrder(order);
             final photoPath = _capturedPodPhotoPath;
             if (photoPath == null) {
@@ -296,7 +395,7 @@ class _RiderShellState extends State<RiderShell> {
               _goTo('photo');
               return;
             }
-            ordersVM.markDelivered(order.id, payMethod: methodStr, podPhotoPath: photoPath);
+            ordersVM.markDelivered(order.id, payMethod: methodStr, podPhotoPath: photoPath, signatureBase64: signatureBase64);
             context.read<AppViewModel>().addEarnings(order.total * 0.15);
             _lastDeliveredId = order.id;
             _capturedPodPhotoPath = null;
@@ -379,6 +478,13 @@ class _RiderShellState extends State<RiderShell> {
           onTabChange: _changeTab,
           onOpenHistory: () => _goTo('history'),
           onLogout: () {
+            context.read<OrdersViewModel>().stopAutoRefresh();
+            context.read<OrdersViewModel>().stopBatchPolling();
+            _pushRefreshSub?.cancel();
+            _pushRefreshSub = null;
+            _orderTapSub?.cancel();
+            _orderTapSub = null;
+            _ordersLoaded = false;
             context.read<AppViewModel>().logout();
             setState(() => _phase = 'language');
           },
@@ -397,7 +503,9 @@ class _RiderShellState extends State<RiderShell> {
             final order = ordersVM2.findById(id);
             setState(() {
               _selectedOrderId = id;
-              _screen = (order == null || order.paid) ? 'photo' : 'payment';
+              // Same urgent fix as the other onArrive above — see comment there.
+              final canSkipPayment = order != null && order.paid && order.payMethod != PayMethod.cash;
+              _screen = canSkipPayment ? 'photo' : 'payment';
             });
           },
         );
