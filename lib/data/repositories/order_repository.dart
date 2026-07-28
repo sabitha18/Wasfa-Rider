@@ -18,12 +18,23 @@ class OrderRepository {
     final res = await _api.get(ApiConfig.orders, query: {'tab': tab});
     // CONFIRMED v2: top-level key is "list", not "data"/"orders".
     final list = (res['list'] ?? res['data'] ?? res['orders'] ?? const []) as List;
+    // TEMP DEBUG (missing-order investigation): log exactly what codes came
+    // back raw from the server for this tab, before any parsing/filtering,
+    // so we can tell "backend never sent it" apart from "we dropped it
+    // during parsing" for a specific order like APM85.
+    final rawCodes = list.map((e) => (e as Map)['code'] ?? e['id'] ?? '<no code/id>').toList();
+    debugPrint('[fetchOrders] tab=$tab raw codes (${rawCodes.length}): $rawCodes');
+    final parsed = list.map((e) => Order.fromJson(e)).toList();
     // Defensive: skip any entry with no usable id at all (seen live — an
     // order with blank id AND null co, causing wasted geocode calls
     // ("[HomeMap] geocode FAILED for order  (co=null)") and very likely
     // the intermittent "Order not found" screen too, since a garbage
     // entry like this can appear/disappear between list refreshes.
-    return list.map((e) => Order.fromJson(e)).where((o) => o.id.isNotEmpty).toList();
+    final dropped = parsed.where((o) => o.id.isEmpty).length;
+    if (dropped > 0) {
+      debugPrint('[fetchOrders] tab=$tab DROPPED $dropped entr${dropped == 1 ? "y" : "ies"} with blank id after parsing — this is a parsing bug, not a backend/assignment issue.');
+    }
+    return parsed.where((o) => o.id.isNotEmpty).toList();
   }
 
   /// CONFIRMED LIVE shape (2026-07-14): {"order": {...fields...}, "items":
@@ -256,6 +267,21 @@ class OrderRepository {
       'file': await MultipartFile.fromFile(filePath),
     });
     await _api.postMultipart(ApiConfig.profileDocument, form);
+  }
+
+  /// CONFIRMED LIVE from Postman (2026-07-15): multipart field is "photo",
+  /// not "file" like every other upload endpoint in this API — this one's
+  /// the odd one out, so don't copy this field name elsewhere by habit.
+  /// Still don't know where the resulting photo URL comes back from
+  /// (this response, or a new field on /me) — debugPrint below will show
+  /// the real response the first time this actually runs.
+  Future<Map<String, dynamic>> uploadProfilePhoto(String filePath) async {
+    final form = FormData.fromMap({
+      'photo': await MultipartFile.fromFile(filePath),
+    });
+    final res = await _api.postMultipart(ApiConfig.profilePhoto, form);
+    debugPrint('[ProfilePhoto] upload response: $res');
+    return res;
   }
 
   // ── Cash handover (Company Cash tab) — backend not built yet ────

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -83,8 +84,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     border: Border.all(color: Colors.white, width: 2),
                     boxShadow: [BoxShadow(color: WTheme.rose.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
                   ),
-                  child: Center(child: Text(driver.avatarInitials,
-                      style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24))),
+                  child: driver.photoUrl != null
+                      ? ClipOval(child: Image.network(driver.photoUrl!, width: 72, height: 72, fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Center(child: Text(driver.avatarInitials,
+                              style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24)))))
+                      : Center(child: Text(driver.avatarInitials,
+                          style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24))),
                 ),
                 const SizedBox(height: 12),
                 Text(driver.name, style: GoogleFonts.dmSans(
@@ -288,6 +293,45 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
   final Set<String> _langs = {};
   final Set<String> _uploadedDocs = {};
   String _photo = '👤';
+  File? _pickedPhotoFile;
+  bool _uploadingPhoto = false;
+
+  /// Was previously entirely fake — tapping the avatar just swapped which
+  /// emoji character showed (👤 -> 📸), nothing was ever captured,
+  /// uploaded, or saved anywhere. Now opens a real camera/gallery choice
+  /// and uploads to the new (2026-07-15) /profile/photo endpoint.
+  Future<void> _pickProfilePhoto() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(leading: const Icon(Icons.camera_alt), title: Text(context.tr('takePhoto')),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera)),
+        ListTile(leading: const Icon(Icons.photo_library), title: Text(context.tr('chooseFromGallery')),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery)),
+      ])),
+    );
+    if (source == null) return;
+    final file = await ImagePicker().pickImage(source: source, imageQuality: 85);
+    if (file == null) return;
+    setState(() { _pickedPhotoFile = File(file.path); _uploadingPhoto = true; });
+    try {
+      // CONFIRMED LIVE (2026-07-15): response is {"ok":true,"url":"..."} —
+      // apply it right away via AppViewModel so the profile overview
+      // header (and anywhere else reading driver.photoUrl) picks it up
+      // instantly, without waiting on a fresh /me fetch.
+      final res = await _repo.uploadProfilePhoto(file.path);
+      final url = res['url'] as String?;
+      if (url != null && mounted) {
+        context.read<AppViewModel>().setProfilePhotoUrl(url);
+      }
+      if (mounted) showWToast(context, '📸 Profile photo updated');
+    } catch (e) {
+      debugPrint('[ProfilePhoto] upload failed: $e');
+      if (mounted) showWToast(context, "Couldn't upload photo — please try again");
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
   int? _serverCompletion; // CONFIRMED: GET /profile returns a "completion" percentage directly
 
   // Fields the backend's /profile expects that this screen has no UI for
@@ -475,10 +519,20 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
     if (_loading) {
       return const Scaffold(backgroundColor: WTheme.blush, body: Center(child: CircularProgressIndicator()));
     }
+    // Fallback for when the driver already has a photo from a previous
+    // session — otherwise this screen would show the plain emoji again
+    // every time it's freshly opened, even though a real photo exists.
+    final appVM = context.watch<AppViewModel>();
+    final existingPhotoUrl = appVM.driver?.photoUrl;
     return Scaffold(
       backgroundColor: WTheme.blush,
       body: Column(children: [
-        RiderRibbon(earnings: 0, deliveries: 0, onShift: true, onToggleShift: () {}),
+        // Was hardcoded onShift: true with a no-op toggle — always showed
+        // ON here regardless of the driver's actual shift state, which is
+        // exactly why this screen could disagree with Home/Orders (which
+        // correctly read the real value). Now reads/toggles the same
+        // shared state everywhere else does.
+        RiderRibbon(earnings: 0, deliveries: 0, onShift: appVM.driver?.onShift ?? false, onToggleShift: appVM.toggleShift),
         // Sub-header
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
@@ -517,7 +571,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                   // Avatar
                   Stack(children: [
                     GestureDetector(
-                      onTap: () => setState(() => _photo = '📸'),
+                      onTap: _uploadingPhoto ? null : _pickProfilePhoto,
                       child: Container(
                         width: 72, height: 72,
                         decoration: BoxDecoration(
@@ -525,7 +579,15 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white.withOpacity(0.5), width: 3),
                         ),
-                        child: Center(child: Text(_photo, style: const TextStyle(fontSize: 28))),
+                        child: _uploadingPhoto
+                            ? const Center(child: SizedBox(width: 22, height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)))
+                            : _pickedPhotoFile != null
+                                ? ClipOval(child: Image.file(_pickedPhotoFile!, width: 72, height: 72, fit: BoxFit.cover))
+                                : existingPhotoUrl != null
+                                    ? ClipOval(child: Image.network(existingPhotoUrl, width: 72, height: 72, fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Center(child: Text(_photo, style: const TextStyle(fontSize: 28)))))
+                                    : Center(child: Text(_photo, style: const TextStyle(fontSize: 28))),
                       ),
                     ),
                     Positioned(bottom: -2, right: -2, child: Container(

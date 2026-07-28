@@ -163,6 +163,16 @@ class AppViewModel extends ChangeNotifier {
     }
   }
 
+  /// Applied optimistically right after a successful profile photo
+  /// upload — the upload response returns the real URL directly, so no
+  /// need to wait for a fresh /me fetch just to show it everywhere.
+  void setProfilePhotoUrl(String url) {
+    if (_driver != null) {
+      _driver!.photoUrl = url;
+      notifyListeners();
+    }
+  }
+
   VehicleType _vehicleFrom(String s) {
     switch (s) {
       case 'car': return VehicleType.car;

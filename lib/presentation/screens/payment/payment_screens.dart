@@ -4,9 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:signature/signature.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
+import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 import 'package:wasfa_rider/core/constants/app_strings.dart';
 
@@ -717,13 +719,17 @@ class _SignatureScreenState extends State<SignatureScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Was hardcoded onShift: true with a no-op toggle — same bug as the
+    // driver profile edit screen: always showed ON here regardless of
+    // actual shift state. Now reads/toggles the same shared state.
+    final appVM = context.watch<AppViewModel>();
     return Scaffold(
       backgroundColor: WTheme.blush,
       body: Column(children: [
         // Ribbon at top (matches HTML)
         RiderRibbon(
           earnings: 0, deliveries: 0,
-          onShift: true, onToggleShift: () {},
+          onShift: appVM.driver?.onShift ?? false, onToggleShift: appVM.toggleShift,
         ),
         // Back button + title
         Padding(

@@ -27,6 +27,14 @@ class ApiConfig {
   static const String profileGet      = '/profile';           // GET
   static const String profileUpdate   = '/profile';           // POST (full_name, civil_id, vehicle_type, bank_iban, ... see docs)
   static const String profileDocument = '/profile/document';  // POST multipart {slot, file}
+  // CONFIRMED path from Postman (2026-07-15) — /profile/photo. BUT the
+  // example body in Postman is clearly a copy-paste mistake: it's a raw
+  // JSON body identical to Save Profile, with no photo/file field at all
+  // and no multipart mode — can't actually carry image data like that.
+  // Using multipart {file: ...} here instead, matching every other real
+  // upload in this API (building-photos, profile documents). Needs
+  // confirming with backend once actually hit.
+  static const String profilePhoto = '/profile/photo';  // POST multipart {photo} — CONFIRMED LIVE 2026-07-15 (was guessed as {file} before, actual field name is "photo")
 
   // ── Home / Orders ────────────────────────────────────────────
   static const String home          = '/home';               // GET — dashboard summary

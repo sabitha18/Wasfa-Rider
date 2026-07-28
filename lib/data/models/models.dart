@@ -422,6 +422,11 @@ class DriverProfile {
   bool needsVehicle; // CONFIRMED field from /me — true means force the vehicle-setup screen
   String? language; // CONFIRMED field from /me — the driver's saved language ('en'/'ar')
   DateTime? shiftStartedAt; // CONFIRMED field from /me — was never parsed before despite being in the response
+  // NOT confirmed whether /me returns this yet (only confirmed source so
+  // far is the upload response itself: {"ok":true,"url":"..."}). Parsed
+  // defensively here so it starts working for free the moment /me adds
+  // it too, without needing another round of changes.
+  String? photoUrl;
 
   DriverProfile({
     this.id,
@@ -438,6 +443,7 @@ class DriverProfile {
     this.needsVehicle = false,
     this.language,
     this.shiftStartedAt,
+    this.photoUrl,
   });
 
   // CONFIRMED shape (seen live): {"id", "name", "phone", "vehicle_type",
@@ -461,6 +467,11 @@ class DriverProfile {
       // the Earnings screen's "Work & Hours" section used a hardcoded
       // fake offset (now.subtract(4h22m)) instead of this real value.
       shiftStartedAt: j['shift_started_at'] != null ? DateTime.tryParse(j['shift_started_at']) : null,
+      // Unconfirmed whether /me includes this — defensive guess at a few
+      // plausible key names. Confirmed-working source is still the
+      // upload response's own "url" field, applied optimistically right
+      // after a successful upload (see profile_screens.dart).
+      photoUrl: j['photo_url'] ?? j['photo'] ?? j['profile_photo'],
       // Not present in /me — left at defaults until GET /earnings is wired
       // into the profile refresh, or confirmed to live elsewhere.
       todayEarnings: 0.0,
