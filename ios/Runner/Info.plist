@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -22,25 +24,22 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
-
-	<!-- Google Maps iOS SDK key — replace with your key -->
 	<key>GMSApiKey</key>
 	<string>AIzaSyCwasrWlCcRar6hb9WidlEKIU9ye62pBjg</string>
-
-	<!-- Location usage descriptions (required by App Store) -->
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>WASFA Rider needs your location to navigate to pickups and deliveries.</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>WASFA Rider uses your camera to capture proof-of-delivery photos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>WASFA Rider uses background location to track your delivery route.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>WASFA Rider uses background location to track your delivery route.</string>
-
-	<!-- Camera usage for proof of delivery photos -->
-	<key>NSCameraUsageDescription</key>
-	<string>WASFA Rider uses your camera to capture proof-of-delivery photos.</string>
-
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>WASFA Rider needs your location to navigate to pickups and deliveries.</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -58,9 +57,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
 </dict>
 </plist>

@@ -58,19 +58,19 @@ class DefaultFirebaseOptions {
   );
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBrdKPdX0Fp5cw2cD0qIJk2z8dMdh0o1PI',
-    appId: '1:973190005434:ios:0900f4ee4a78699729f883',
+    appId: '1:973190005434:ios:bbd6e3e8c22767a029f883',
     messagingSenderId: '973190005434',
     projectId: 'wasfa-rider',
     storageBucket: 'wasfa-rider.firebasestorage.app',
-    iosBundleId: 'kw.wasfa.wasfaRider',
+    iosBundleId: 'kw.wasfa.rider',
   );
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBrdKPdX0Fp5cw2cD0qIJk2z8dMdh0o1PI',
-    appId: '1:973190005434:ios:0900f4ee4a78699729f883',
+    appId: '1:973190005434:ios:bbd6e3e8c22767a029f883',
     messagingSenderId: '973190005434',
     projectId: 'wasfa-rider',
     storageBucket: 'wasfa-rider.firebasestorage.app',
-    iosBundleId: 'kw.wasfa.wasfaRider',
+    iosBundleId: 'kw.wasfa.rider',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
