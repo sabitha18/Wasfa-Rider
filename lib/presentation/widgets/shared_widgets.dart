@@ -1,8 +1,137 @@
+import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
 import '../../core/constants/app_strings.dart';
+
+// CLIENT-REPORTED (2026-08-22): Order Detail's own header still showed a
+// permanent "0.0 km · 0 min" — this same class of bug was already fixed
+// on Home's card, but that fix used a PRIVATE helper local to
+// home_screen.dart, so Order Detail never got the same fix. Made public
+// and shared here so both screens (and any future one) can compute a
+// real, live straight-line distance instead of relying on backend's own
+// distance_km/eta_min fields, which have been null on every order seen
+// live throughout this whole project.
+double haversineKm(LatLng a, LatLng b) {
+  const earthRadiusKm = 6371.0;
+  final dLat = _deg2rad(b.latitude - a.latitude);
+  final dLng = _deg2rad(b.longitude - a.longitude);
+  final lat1 = _deg2rad(a.latitude);
+  final lat2 = _deg2rad(b.latitude);
+  final sinDLat = sin(dLat / 2);
+  final sinDLng = sin(dLng / 2);
+  final h = sinDLat * sinDLat + cos(lat1) * cos(lat2) * sinDLng * sinDLng;
+  final c = 2 * atan2(sqrt(h), sqrt(1 - h));
+  return earthRadiusKm * c;
+}
+
+double _deg2rad(double deg) => deg * (pi / 180.0);
+
+// CLIENT-REPORTED (2026-08-22): a wildly wrong distance ("3499.6 km ·
+// ~6999 min") showed on screen as if it were a normal, trustworthy
+// number. Root cause was a bad/stale GPS reading (not a bug in the math
+// itself), but neither home_screen.dart's nor order_detail_screen.dart's
+// copy of this calculation had any sanity check to catch an obviously
+// impossible result for a same-city delivery — showing it anyway is
+// actively misleading, not just imprecise. Shared here (was duplicated
+// separately in both files) so both get this fix at once, and so a
+// future third usage doesn't reintroduce the same duplicated logic.
+({double? km, int? etaMin}) liveDistanceAndEta(LatLng? driverPos, LatLng? destPos) {
+  if (driverPos == null || destPos == null) return (km: null, etaMin: null);
+  final raw = haversineKm(driverPos, destPos);
+  // CLIENT-REPORTED (2026-08-22): this used to reject anything over
+  // 100km as "must be a bad GPS reading" — but that was the wrong
+  // assumption. Confirmed live: testing from Kozhikode, India against a
+  // Kuwait-based pharmacy produces a genuinely correct ~3000+ km
+  // distance, which this was silently hiding as if it were a glitch.
+  // A real driver in production is always physically in Kuwait, so this
+  // "safety net" was never actually needed there — it only ever broke
+  // visibility during cross-country testing instead. No sanity check
+  // needed at all: any two valid coordinates produce a mathematically
+  // correct distance regardless of how large it happens to be.
+  const avgSpeedKmh = 30.0; // rough urban-driving assumption — not traffic-aware, not routed
+  return (km: raw, etaMin: (raw / avgSpeedKmh * 60).round());
+}
+
+// ── Pharmacy map marker icon ─────────────────────────────────────
+// CLIENT-REQUESTED: pharmacy pickup locations need their own distinct
+// marker, separate from the customer/destination pin and the driver's
+// own "You" marker. Shared here (not duplicated per-screen) since both
+// home_screen.dart's inline map and in_app_map_screen.dart's full map
+// need the identical icon. Drawing a bitmap is async and the same icon
+// is reused everywhere, so it's built once and cached rather than
+// redrawn on every rebuild.
+class PharmacyMarkerIcon {
+  static BitmapDescriptor? _cached;
+  static Future<BitmapDescriptor>? _pending;
+
+  static Future<BitmapDescriptor> get() {
+    if (_cached != null) return Future.value(_cached);
+    return _pending ??= _build().then((icon) {
+      _cached = icon;
+      return icon;
+    });
+  }
+
+  static Future<BitmapDescriptor> _build() async {
+    // CLIENT-REPORTED: the first version was a rounded-square badge —
+    // read as a floating icon, not a map marker. Redrawn as an actual
+    // teardrop pin (circular head + tapered point at the bottom), the
+    // same silhouette every standard map pin uses, just green with a
+    // checkmark instead of red/blank.
+    const double w = 96, h = 116; // taller than wide — head + tail
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, w, h));
+
+    const headCenter = Offset(w / 2, w * 0.36);
+    const headRadius = w * 0.34;
+    const tip = Offset(w / 2, h - 4);
+
+    // Head (circle) unioned with a triangular tail down to the tip —
+    // Path.combine gives a clean single silhouette with no seam between
+    // the two shapes, rather than two overlapping shapes drawn separately.
+    final headPath = Path()..addOval(Rect.fromCircle(center: headCenter, radius: headRadius));
+    final tailPath = Path()
+      ..moveTo(headCenter.dx - headRadius * 0.8, headCenter.dy + headRadius * 0.5)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(headCenter.dx + headRadius * 0.8, headCenter.dy + headRadius * 0.5)
+      ..close();
+    final pinPath = Path.combine(PathOperation.union, headPath, tailPath);
+
+    // Subtle drop shadow first, then the pin itself, then a white
+    // outline — same visual layering real map pins use so it reads as
+    // a marker sitting ON the map rather than a flat sticker.
+    canvas.drawPath(pinPath.shift(const Offset(0, 2)), Paint()
+      ..color = Colors.black.withOpacity(0.25)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    canvas.drawPath(pinPath, Paint()..color = const Color(0xFF2ECC71));
+    canvas.drawPath(pinPath, Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.045);
+
+    // White checkmark, centered in the head (not the whole taller canvas).
+    final checkPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.10
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final check = Path()
+      ..moveTo(headCenter.dx - headRadius * 0.5, headCenter.dy + headRadius * 0.05)
+      ..lineTo(headCenter.dx - headRadius * 0.1, headCenter.dy + headRadius * 0.4)
+      ..lineTo(headCenter.dx + headRadius * 0.55, headCenter.dy - headRadius * 0.35);
+    canvas.drawPath(check, checkPaint);
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(w.toInt(), h.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
+}
 
 // ── Status Pill ────────────────────────────────────────────────
 class StatusPill extends StatelessWidget {
@@ -34,13 +163,19 @@ class StatusPill extends StatelessWidget {
 
 // ── Driver State Pill ──────────────────────────────────────────
 class DriverStatePill extends StatelessWidget {
-  const DriverStatePill({super.key, required this.state, this.small = false});
+  const DriverStatePill({super.key, required this.state, this.small = false, this.pharmaciesPicked, this.pharmaciesTotal});
   final DriverState state;
   final bool small;
+  // CLIENT-CONFIRMED LIVE (2026-08-19): backend added these to the list
+  // endpoint specifically for this — shows as "Collecting (1/3)" rather
+  // than just "Collecting", so the driver can see multi-pharmacy pickup
+  // progress right from the orders list without opening the order.
+  final int? pharmaciesPicked;
+  final int? pharmaciesTotal;
 
   @override
   Widget build(BuildContext context) {
-    final (bg, fg, icon, label) = switch (state) {
+    final (bg, fg, icon, baseLabel) = switch (state) {
       DriverState.pending    => (Colors.grey.withOpacity(0.15), WTheme.muted,                   '⏳', 'Pending'),
       DriverState.collecting => (WTheme.aqua.withOpacity(0.20), const Color(0xFF2A9BBC),         '🛒', 'Collecting'),
       DriverState.pickedUp   => (WTheme.sky.withOpacity(0.15),  WTheme.sky,                      '📦', 'Picked up'),
@@ -48,6 +183,9 @@ class DriverStatePill extends StatelessWidget {
       DriverState.delivered  => (WTheme.ok.withOpacity(0.15),   WTheme.ok,                       '✓',  'Delivered'),
       DriverState.failed     => (WTheme.err.withOpacity(0.12),  WTheme.err,                      '🚫', 'Failed'),
     };
+    final label = (state == DriverState.collecting && pharmaciesTotal != null && pharmaciesTotal! > 1)
+        ? '$baseLabel (${pharmaciesPicked ?? 0}/$pharmaciesTotal)'
+        : baseLabel;
     return Container(
       padding: EdgeInsets.symmetric(horizontal: small ? 9 : 11, vertical: small ? 3 : 4),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(99)),
@@ -127,13 +265,30 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
         // No GestureDetector here — the track itself is not interactive,
         // so tapping anywhere that isn't the thumb does nothing at all.
         child: Stack(children: [
-          // Label — centered, fades out as thumb covers it
-          Center(child: Opacity(
-            opacity: (1 - progress).clamp(0.0, 1.0),
-            child: Text(widget.label, style: GoogleFonts.dmSans(
-              fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white,
-            )),
-          )),
+          // Label — centered in the space AFTER the thumb, fades out as
+          // the thumb covers it while dragging. CLIENT-REPORTED: longer
+          // labels (e.g. "Heading to patient (open directions)") were
+          // centered across the FULL track, which put their start right
+          // underneath the thumb — the thumb paints on top and hid the
+          // first few letters, while the tail end ran off the right edge.
+          // Reserving the thumb's own width on the left, and shrinking
+          // the text to fit via FittedBox, means every label — short or
+          // long, any device width — stays fully visible and never sits
+          // under the thumb.
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.only(left: _thumbW, right: 10),
+              child: Center(child: Opacity(
+                opacity: (1 - progress).clamp(0.0, 1.0),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(widget.label, maxLines: 1, style: GoogleFonts.dmSans(
+                    fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white,
+                  )),
+                ),
+              )),
+            ),
+          ),
           // White thumb — the ONLY part that responds to drag.
           AnimatedPositioned(
             duration: _dragging ? Duration.zero : const Duration(milliseconds: 250),

@@ -245,20 +245,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
             const SizedBox(height: 22),
-
-            // ── Footer ────────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(12)),
-              child: RichText(text: TextSpan(
-                style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, height: 1.6),
-                children: [
-                  TextSpan(text: '${context.tr('footerAppInfo')}\n',
-                      style: TextStyle(color: WTheme.navy, fontWeight: FontWeight.w800)),
-                  TextSpan(text: context.tr('footerConnected')),
-                ],
-              )),
-            ),
           ],
         )),
         RiderBottomNav(current: 'profile', onChanged: widget.onTabChange),

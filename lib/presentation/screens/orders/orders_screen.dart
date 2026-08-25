@@ -18,12 +18,16 @@ class OrdersScreen extends StatefulWidget {
     required this.onOpenBatchPickup,
     required this.onCallNow,
     required this.onOpenMap,
+    required this.onOpenMultiPickup,
   });
   final ValueChanged<String> onTabChange;
   final ValueChanged<String> onOpenOrder;
   final VoidCallback onOpenBatchPickup;
   final ValueChanged<String> onCallNow;
   final ValueChanged<Order> onOpenMap;
+  // CLIENT-REQUESTED (2026-08-19): tapping the "N pharmacies" chip on a
+  // multi-pharmacy order opens that order's own pickup checklist.
+  final ValueChanged<String> onOpenMultiPickup;
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -193,39 +197,74 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   // ── Reorderable list (active tab with multiple cards) ─────────
   Widget _buildReorderableList(List<Order> filtered, OrdersViewModel vm, List<Order> orders) {
+    // CLIENT-REPORTED (2026-08-18): confirmed on video — dragging an
+    // order card could visually slide it clear past the Active/Done/All
+    // tabs and date filter chips, landing ABOVE them (or sandwiching
+    // them between two cards mid-drag). Root cause: those headers were
+    // rendered as ordinary children INSIDE the same ReorderableListView
+    // as the cards — wrapped in _NonDraggableItem, but that wrapper was
+    // a complete no-op (just `Widget build(context) => child;`), so it
+    // never actually stopped a dragged card from being reordered around
+    // them. The only real fix is structural: headers now live in a
+    // fixed Column ABOVE the ReorderableListView entirely, not as fake
+    // "header items" within it — a drag can't visually reach an area
+    // it isn't part of the same scrollable/reorderable widget as.
     final headers = _headers(orders, vm);
-    return RefreshIndicator(
-      color: WTheme.rose,
-      onRefresh: vm.refresh,
-      child: ReorderableListView(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        buildDefaultDragHandles: false,
-        onReorder: (oldIdx, newIdx) {
-          final hLen = headers.length;
-          final from = oldIdx - hLen;
-          var to = newIdx - hLen;
-          if (from < 0 || from >= filtered.length) return;
-          if (to > from) to -= 1;
-          to = to.clamp(0, filtered.length - 1);
-          final ids = filtered.map((o) => o.id).toList();
-          ids.insert(to, ids.removeAt(from));
-          vm.reorderActive(ids);
-          showWToast(context, '🔢 Order sequence updated — next stop is now #1');
-        },
-        children: [
-          for (int i = 0; i < headers.length; i++)
-            _NonDraggableItem(key: ValueKey('h$i'), child: headers[i]),
-          ...filtered.asMap().entries.map((e) {
-            final idx = e.key + headers.length;
-            final o   = e.value;
-            // Pass dragIndex so the card renders the ≡ handle inside itself
-            return _buildCardWidget(o, vm, dragIndex: idx);
-          }),
-          if (filtered.isEmpty)
-            _NonDraggableItem(key: const ValueKey('empty'), child: _emptyState()),
-        ],
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        child: Column(children: headers),
       ),
-    );
+      Expanded(
+        child: RefreshIndicator(
+          color: WTheme.rose,
+          onRefresh: vm.refresh,
+          child: ReorderableListView(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            buildDefaultDragHandles: false,
+            onReorder: (oldIdx, newIdx) async {
+              // No more header-offset math needed — this list now only
+              // ever contains order cards, so oldIdx/newIdx map directly.
+              final from = oldIdx;
+              var to = newIdx;
+              if (from < 0 || from >= filtered.length) return;
+              if (to > from) to -= 1;
+              to = to.clamp(0, filtered.length - 1);
+              final ids = filtered.map((o) => o.id).toList();
+              ids.insert(to, ids.removeAt(from));
+              // SUPERSEDED (2026-08-18): the per-order position endpoint
+              // is gone — client confirmed the new bulk endpoint
+              // replaces it entirely, taking the whole new sequence in
+              // one call instead of needing a loop of calls for anything
+              // beyond a single swap.
+              // CLIENT-REPORTED separately: this toast used to fire
+              // unconditionally the instant the drag ended, regardless
+              // of whether the backend sync succeeded. Now waits for
+              // the real result: an honest "not saved" warning when it
+              // fails, instead of a success message that wasn't
+              // actually true.
+              final synced = await vm.reorderActive(ids);
+              if (!context.mounted) return;
+              if (synced) {
+                showWToast(context, '🔢 Order sequence updated — next stop is now #1');
+              } else {
+                showWToast(context, "⚠️ Reordered on your device, but couldn't save it yet — it may revert on refresh");
+              }
+            },
+            children: [
+              ...filtered.asMap().entries.map((e) {
+                final idx = e.key;
+                final o   = e.value;
+                // Pass dragIndex so the card renders the ≡ handle inside itself
+                return _buildCardWidget(o, vm, dragIndex: idx);
+              }),
+              if (filtered.isEmpty)
+                _NonDraggableItem(key: const ValueKey('empty'), child: _emptyState()),
+            ],
+          ),
+        ),
+      ),
+    ]);
   }
 
   // ── Normal scroll list (done/all tab) ─────────────────────────
@@ -252,21 +291,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
     onTap: () => widget.onOpenOrder(o.id),
     onCallNow: o.hasPendingCallRequest ? () => widget.onCallNow(o.id) : null,
     onCancelEscalation: o.hasPendingEscalation ? () => vm.cancelEscalation(o.id) : null,
-    onCopyLink: () {
-      // TEMPORARILY DISABLED — this used to copy a fabricated URL
-      // (https://wasfa.kw/pay/{id}) that was never confirmed with backend
-      // and almost certainly doesn't point to a real payment page. Better
-      // to tell the driver it's not ready than hand them a broken link to
-      // send a real customer. Restore the real link here once backend
-      // confirms the actual format/endpoint.
-      showWToast(context, "Payment link isn't ready yet — check back soon");
-    },
     onOpenMap: () => widget.onOpenMap(o),
     onCallCustomer: () async {
       final url = 'tel:${o.phone.replaceAll(RegExp(r'\s'), '')}';
       if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
     },
     onShowAddress: () => setState(() => _addrOrder = o),
+    onOpenMultiPickup: () => widget.onOpenMultiPickup(o.id),
   );
 
   Widget _emptyState() => Padding(
@@ -425,16 +456,16 @@ class _OrderListCard extends StatelessWidget {
     this.dragIndex,
     this.onCallNow,
     this.onCancelEscalation,
-    this.onCopyLink,
     this.onOpenMap,
     this.onCallCustomer,
     this.onShowAddress,
+    this.onOpenMultiPickup,
   });
   final Order order;
   final VoidCallback onTap;
   final Color edgeColor;
   final int? dragIndex;          // non-null = show ≡ drag handle
-  final VoidCallback? onCallNow, onCancelEscalation, onCopyLink, onOpenMap, onCallCustomer, onShowAddress;
+  final VoidCallback? onCallNow, onCancelEscalation, onOpenMap, onCallCustomer, onShowAddress, onOpenMultiPickup;
 
   @override
   Widget build(BuildContext context) {
@@ -550,9 +581,12 @@ class _OrderListCard extends StatelessWidget {
                     ]),
                     const SizedBox(height: 12),
                     // Row 4: Action buttons
+                    // CLIENT-REPORTED: removed LINK — there's no real
+                    // payment link to send yet (see removed onCopyLink
+                    // below), so showing the button just to toast "not
+                    // ready" wasn't useful. Restore it once backend has
+                    // an actual payment-link endpoint/format confirmed.
                     Row(children: [
-                      _ActionBtn(emoji: '🔗', label: context.tr('link'),  color: WTheme.ok,  onTap: onCopyLink),
-                      const SizedBox(width: 6),
                       _ActionBtn(emoji: '🗺', label: context.tr('map'),   color: WTheme.sky, onTap: onOpenMap),
                       const SizedBox(width: 6),
                       _ActionBtn(emoji: '📞', label: context.tr('callCap'),  color: WTheme.ok,  onTap: onCallCustomer),
@@ -563,7 +597,8 @@ class _OrderListCard extends StatelessWidget {
                       Row(children: [
                         PayChip(method: order.payMethod, paid: order.paid),
                         const SizedBox(width: 6),
-                        DriverStatePill(state: order.driverState, small: true),
+                        DriverStatePill(state: order.driverState, small: true,
+                            pharmaciesPicked: order.pharmaciesPicked, pharmaciesTotal: order.pharmaciesTotal),
                       ]),
                       if (order.status != OrderStatus.done && order.status != OrderStatus.failed)
                         SlaCountdown(order: order, size: 's'),
@@ -580,8 +615,19 @@ class _OrderListCard extends StatelessWidget {
                         _MetaChip('📦 ${order.items.length} item${order.items.length != 1 ? "s" : ""}'),
                         if (order.multiPharmacy) ...[
                           Text('•', style: TextStyle(color: WTheme.cloud)),
-                          _MetaChip('🏥 ${order.pickups.length} pharmacies',
-                              color: const Color(0xFF2A9BBC)),
+                          // CLIENT-REPORTED (2026-08-19): this showed
+                          // "0 pharmacies" always — same class of bug
+                          // already fixed once in Order Detail: it used
+                          // order.pickups.length, a field confirmed to
+                          // always be empty. order.pharmacies is the
+                          // real, confirmed field. Also now tappable,
+                          // opening the multi-pharmacy pickup screen for
+                          // this specific order.
+                          GestureDetector(
+                            onTap: onOpenMultiPickup,
+                            child: _MetaChip('🏥 ${order.pharmacies.length} pharmacies',
+                                color: const Color(0xFF2A9BBC)),
+                          ),
                         ],
                         if (order.deliveredAt != null) ...[
                           Text('•', style: TextStyle(color: WTheme.cloud)),

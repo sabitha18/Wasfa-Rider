@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:signature/signature.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/presentation/viewmodels/app_viewmodel.dart';
@@ -13,7 +14,16 @@ import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 import 'package:wasfa_rider/core/constants/app_strings.dart';
 
 // ── PAYMENT SCREEN ─────────────────────────────────────────────
-class PaymentScreen extends StatelessWidget {
+// CLIENT-REPORTED: rider needs a way to switch payment method at the
+// door when the customer changes their mind (e.g. order says cash but
+// they want to pay by KNET, or send a link instead). The order's real
+// payMethod still shows as the primary/default action — this does NOT
+// undo the earlier urgent fix (a cash order can no longer be silently
+// "paid" via KNET/link by accident) — the other two methods are now
+// tucked behind an explicit "customer wants to pay differently?" toggle
+// that the rider has to deliberately open, so any switch is a conscious
+// action, not an accidental tap.
+class PaymentScreen extends StatefulWidget {
   const PaymentScreen({
     super.key,
     required this.order,
@@ -26,7 +36,15 @@ class PaymentScreen extends StatelessWidget {
   final VoidCallback onBack, onCollectCash, onCollectKnet, onSendLink;
 
   @override
+  State<PaymentScreen> createState() => _PaymentScreenState();
+}
+
+class _PaymentScreenState extends State<PaymentScreen> {
+  bool _showOtherMethods = false;
+
+  @override
   Widget build(BuildContext context) {
+    final order = widget.order;
     return Scaffold(
       backgroundColor: WTheme.blush,
       body: SafeArea(
@@ -36,7 +54,7 @@ class PaymentScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
             child: Row(children: [
               GestureDetector(
-                onTap: onBack,
+                onTap: widget.onBack,
                 child: Container(
                   width: 36, height: 36,
                   decoration: BoxDecoration(
@@ -96,28 +114,82 @@ class PaymentScreen extends StatelessWidget {
                   ),
                 ]),
               ),
-              // URGENT FIX (client-reported): previously all 3 options
-              // showed regardless of the order's actual payment method —
-              // meaning a CASH order could be "confirmed paid" by tapping
-              // KNET or Send Link instead, both of which skip straight
-              // past ever confirming physical cash was collected. Now
-              // only the option matching the order's real payMethod shows,
-              // so a cash order can only ever be resolved by clicking Cash.
+              // Primary option — always matches the order's actual recorded
+              // payMethod, exactly like before this change. This still can't
+              // be bypassed by accident; the other two only appear once the
+              // rider deliberately opens the toggle below.
               if (order.payMethod == PayMethod.cash)
                 _PayOption(
                   emoji: '💵', label: context.tr('cashLabel'), desc: context.tr('collectCashNow'),
-                  color: WTheme.warn, onTap: onCollectCash,
+                  color: WTheme.warn, onTap: widget.onCollectCash,
                 )
               else if (order.payMethod == PayMethod.knet)
                 _PayOption(
                   emoji: '💳', label: context.tr('knetLabel'), desc: context.tr('cardAtDoor'),
-                  color: WTheme.sky, onTap: onCollectKnet,
+                  color: WTheme.sky, onTap: widget.onCollectKnet,
                 )
               else
                 _PayOption(
                   emoji: '🔗', label: context.tr('sendPaymentLink'), desc: context.tr('whatsappCheckout'),
-                  color: WTheme.ok, onTap: onSendLink,
+                  color: WTheme.ok, onTap: widget.onSendLink,
                 ),
+
+              // "Customer wants to pay differently?" — collapsed by default
+              // so the default flow is unchanged; opening it is a deliberate
+              // action, not something a rider can tap into by accident.
+              const SizedBox(height: 4),
+              GestureDetector(
+                onTap: () => setState(() => _showOtherMethods = !_showOtherMethods),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Text(context.tr('changePaymentMethod'), style: GoogleFonts.dmSans(
+                        color: WTheme.muted, fontSize: 12, fontWeight: FontWeight.w700,
+                        decoration: TextDecoration.underline, decorationColor: WTheme.muted)),
+                    const SizedBox(width: 4),
+                    AnimatedRotation(
+                      turns: _showOtherMethods ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Icon(Icons.keyboard_arrow_down_rounded, color: WTheme.muted, size: 18),
+                    ),
+                  ]),
+                ),
+              ),
+              AnimatedCrossFade(
+                duration: const Duration(milliseconds: 220),
+                crossFadeState: _showOtherMethods ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                firstChild: const SizedBox(width: double.infinity, height: 0),
+                secondChild: Column(children: [
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: WTheme.warn.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(context.tr('changePaymentMethodWarn'), style: GoogleFonts.dmSans(
+                        color: const Color(0xFFB6791A), fontSize: 11, fontWeight: FontWeight.w600),
+                        textAlign: TextAlign.center),
+                  ),
+                  if (order.payMethod != PayMethod.cash)
+                    _PayOption(
+                      emoji: '💵', label: context.tr('cashLabel'), desc: context.tr('collectCashNow'),
+                      color: WTheme.warn, onTap: widget.onCollectCash,
+                    ),
+                  if (order.payMethod != PayMethod.knet)
+                    _PayOption(
+                      emoji: '💳', label: context.tr('knetLabel'), desc: context.tr('cardAtDoor'),
+                      color: WTheme.sky, onTap: widget.onCollectKnet,
+                    ),
+                  if (order.payMethod == PayMethod.cash || order.payMethod == PayMethod.knet)
+                    _PayOption(
+                      emoji: '🔗', label: context.tr('sendPaymentLink'), desc: context.tr('whatsappCheckout'),
+                      color: WTheme.ok, onTap: widget.onSendLink,
+                    ),
+                ]),
+              ),
             ]),
           )),
         ]),
@@ -304,8 +376,15 @@ class SendLinkScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initials = order.patient.split(' ').map((n) => n.isNotEmpty ? n[0] : '').take(2).join();
-    final link = 'pay.wasfakw.com/o/${order.id}';
-    final preview = context.tr('whatsappPreviewTemplate')
+    // CLIENT-REPORTED (2026-08-13): confirmed live — the order response
+    // already includes a real, working payment_link (Tap Payments
+    // url-shortener). Previously this screen fabricated its own fake
+    // link (pay.wasfakw.com/o/{id}, never a real page) and its "send"
+    // button never actually launched WhatsApp at all — it just faked
+    // success and navigated back. Both fixed below: real link when
+    // available, and the swipe now genuinely opens WhatsApp with it.
+    final link = order.paymentLink;
+    final preview = link == null ? null : context.tr('whatsappPreviewTemplate')
         .replaceFirst('{name}', order.patient)
         .replaceFirst('{id}', order.id)
         .replaceFirst('{link}', link)
@@ -333,7 +412,14 @@ class SendLinkScreen extends StatelessWidget {
               ]),
             ]),
           ),
-          Expanded(child: SingleChildScrollView(
+          if (link == null)
+            Expanded(child: Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text("This order doesn't have a payment link yet — check back soon.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13, fontWeight: FontWeight.w600)),
+            )))
+          else Expanded(child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
             child: Container(
               padding: const EdgeInsets.all(20),
@@ -395,10 +481,19 @@ class SendLinkScreen extends StatelessWidget {
               ]),
             ),
           )),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
-            child: SwipeToConfirm(label: context.tr('sendViaWhatsapp'), color: WTheme.ok, onConfirm: onSent),
-          ),
+          if (link != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+              child: SwipeToConfirm(
+                label: context.tr('sendViaWhatsapp'), color: WTheme.ok,
+                onConfirm: () async {
+                  final phone = order.phone.replaceAll(RegExp(r'\D'), '');
+                  final uri = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(preview!)}');
+                  if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  onSent();
+                },
+              ),
+            ),
         ]),
       ),
     );
@@ -890,9 +985,15 @@ class _SignatureScreenState extends State<SignatureScreen> {
               controller: _otpCtrls[i], focusNode: _otpNodes[i],
               maxLength: 1, keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
-              style: GoogleFonts.dmSans(fontSize: 22, fontWeight: FontWeight.w800, color: WTheme.navy),
+              // CLIENT-REPORTED: digits looked cramped, almost touching
+              // the box border — fontSize 22 with no contentPadding
+              // override left almost no breathing room in a 42px-wide
+              // box. Sized down + isDense so the digit sits centered
+              // with clear space around it instead of crowding the edge.
+              style: GoogleFonts.dmSans(fontSize: 18, fontWeight: FontWeight.w800, color: WTheme.navy),
               decoration: InputDecoration(
-                counterText: '', filled: false,
+                counterText: '', filled: false, isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: _otpCtrls[i].text.isNotEmpty ? WTheme.rose : WTheme.cloud, width: 2)),
                 enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),

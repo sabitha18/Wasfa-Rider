@@ -148,6 +148,27 @@ class AppViewModel extends ChangeNotifier {
     }
   }
 
+  /// CLIENT-REQUESTED: auto-on when the app opens, auto-off when it
+  /// closes/backgrounds — see RiderShell's WidgetsBindingObserver in
+  /// main.dart, which calls this on app lifecycle changes. Kept separate
+  /// from toggleShift() above (the driver's own manual tap): this is a
+  /// silent, best-effort background sync, not a user action, so it never
+  /// surfaces an error snackbar — a failed auto-off in particular
+  /// shouldn't interrupt whatever the driver is doing when they open the
+  /// app back up. No-ops if there's no driver yet (not logged in) or
+  /// it's already in that state, so it's safe to call on every lifecycle
+  /// event without worrying about redundant API calls.
+  Future<void> setShiftAuto(bool value) async {
+    if (_driver == null || _driver!.onShift == value) return;
+    try {
+      await _orderRepo.setShift(value);
+      _driver!.onShift = value;
+      notifyListeners();
+    } on ApiException catch (e) {
+      debugPrint('[AppViewModel] auto shift-$value failed: $e');
+    }
+  }
+
   Future<void> logout() async {
     await _authRepo.logout();
     _isLoggedIn = false;

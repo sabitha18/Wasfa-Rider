@@ -31,13 +31,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
   // CONFIRMED real shape from GET /earnings?period=... (seen live):
   //   { "today": 334.874, "week": 334.874, "month": 335.796,
   //     "balance": ..., "paid_out": ..., "rule": {..., "value": "2.000"},
+  //     "period": "today", "period_total": 334.874, "period_count": 1,
   //     "rows": [ {"amount": "334.874", "earned_on": "2026-07-14",
   //                "created_at": "2026-07-14 08:34:25", "code": "APM64", ...}, ... ] }
   // The `period` param does NOT actually filter the top-level today/week/
   // month totals — those three always come back together regardless of
-  // what was requested. `rows` is the one thing that's period-scoped, and
-  // is real per-delivery data — used below to build an actual chart
-  // instead of the old hardcoded fake bars.
+  // what was requested. `period_total`/`period_count` (confirmed later,
+  // 2026-08-13) ARE genuinely period-scoped though — they're what
+  // _periodTotal/displayDeliveries below actually use now, with the old
+  // today/week/month-key lookup kept only as a fallback. `rows` is also
+  // period-scoped, and is real per-delivery data — used below to build
+  // an actual chart instead of the old hardcoded fake bars.
   String _period = 'today';
   bool _loadingPeriod = false;
   Map<String, dynamic>? _periodData;
@@ -68,9 +72,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
     _ => context.tr('monthLabel'),
   };
 
-  /// Real commission total for the selected period, straight from the
-  /// confirmed today/week/month keys — no more guessing at field names.
-  double get _periodTotal => (_periodData?[_period] as num?)?.toDouble() ?? 0.0;
+  /// Real commission total for the selected period. CONFIRMED (2026-08-13):
+  /// the response also includes an explicit `period_total` field, labeled
+  /// by the `period` field itself — a more direct answer to "the total for
+  /// what I asked for" than picking today/week/month by key name, which
+  /// only worked because those three happen to be spelled the same as the
+  /// period query values. Falls back to the old lookup if period_total
+  /// is ever missing (e.g. an older backend response).
+  double get _periodTotal =>
+      (_periodData?['period_total'] as num?)?.toDouble() ??
+      (_periodData?[_period] as num?)?.toDouble() ??
+      0.0;
 
   /// Real commission rate from the backend rule, e.g. "2.000" -> 2%.
   /// Replaces whatever hardcoded percentage string was shown before.
@@ -156,11 +168,23 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final totalKm = done.fold(0.0, (s, o) => s + o.distanceKm);
 
     final isToday = _period == 'today';
-    // 'today' keeps using the already-working live view-model data for its
-    // headline stats (trusted existing source); week/month now use the
-    // CONFIRMED real fields instead of guessed key names.
-    final displayEarnings = isToday ? earnings : _periodTotal;
-    final displayDeliveries = isToday ? done.length : _rows.length;
+    // CLIENT-REPORTED (2026-08-13): "Today" showed 0.000 while the API's
+    // own period_total said 0.260 for the same day. Root cause: `earnings`
+    // above (driver.todayEarnings) is PURELY local — DriverProfile.fromJson
+    // hardcodes it to 0.0 on every fetch, and the only thing that ever
+    // increments it is addEarnings() right after a delivery completes
+    // in THIS session. Restart the app mid-shift, or complete a delivery
+    // any other way, and it silently resets/never counts it — even
+    // though backend's /earnings correctly tracks it regardless. Taking
+    // the higher of the two: never regresses to a stale local 0 when the
+    // API has real data, but still reflects a just-completed delivery
+    // instantly without waiting for the next fetch.
+    final displayEarnings = isToday ? (earnings > _periodTotal ? earnings : _periodTotal) : _periodTotal;
+    // CONFIRMED (2026-08-13): response also includes period_count —
+    // backend's own count for the period, more reliable than rows.length
+    // if rows is ever paginated/capped. 'today' still uses the trusted
+    // live view-model count, same reasoning as displayEarnings above.
+    final displayDeliveries = isToday ? done.length : ((_periodData?['period_count'] as num?)?.toInt() ?? _rows.length);
     // Failed-delivery count and total distance simply aren't present
     // anywhere in this endpoint's response — rather than show a fake or
     // wrong number for Week/Month, these stay null and render as "—".
@@ -478,8 +502,7 @@ class _CompanyCashSection extends StatefulWidget {
 
 class _CompanyCashSectionState extends State<_CompanyCashSection> {
   final _repo = OrderRepository();
-  double? _balance;
-  List<CashHandoverRecord> _history = [];
+  CashHandoverSummary? _summary;
   bool _loading = true;
   String? _error;
 
@@ -492,14 +515,19 @@ class _CompanyCashSectionState extends State<_CompanyCashSection> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final balance = await _repo.fetchCashBalance();
-      final history = await _repo.fetchCashHandovers();
+      // CONFIRMED LIVE (2026-08-11): /driver/cash-handovers now returns
+      // total_pending/total_handed_over directly. Using those instead of
+      // the separate fetchCashBalance() call (a different, still fully
+      // unconfirmed endpoint) and instead of summing _history locally —
+      // this list may only be a recent page, not the driver's complete
+      // history, so a local sum could under-count.
+      final summary = await _repo.fetchCashHandovers();
       if (!mounted) return;
-      setState(() { _balance = balance; _history = history; _loading = false; });
+      setState(() { _summary = summary; _loading = false; });
     } catch (e) {
-      // Backend doesn't have this built yet as of 2026-07-15 — show a
-      // clear "not available" state rather than a fake number or a crash.
-      debugPrint('[CompanyCash] load FAILED (expected until backend ships this): $e');
+      // cash-handovers is confirmed live now — a failure here means an
+      // actual network/auth/server error, not a missing endpoint.
+      debugPrint('[CompanyCash] load failed: $e');
       if (!mounted) return;
       setState(() { _loading = false; _error = 'not_ready'; });
     }
@@ -522,8 +550,9 @@ class _CompanyCashSectionState extends State<_CompanyCashSection> {
           child: Center(child: CircularProgressIndicator()));
     }
     if (_error != null) {
-      // Backend doesn't have cash-balance/cash-handovers built yet.
-      // Being upfront about that instead of showing fake numbers.
+      // cash-handovers is confirmed live now, but this call can still
+      // fail (network, auth, server error) — show a clear "not
+      // available" state rather than a fake number or a crash.
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
         child: Column(children: [
@@ -537,8 +566,9 @@ class _CompanyCashSectionState extends State<_CompanyCashSection> {
       );
     }
 
-    final companyCash = _balance ?? 0.0;
-    final totalEverHanded = _history.fold(0.0, (s, h) => s + h.amount);
+    final companyCash = _summary?.totalPending ?? 0.0;
+    final totalEverHanded = _summary?.totalHandedOver ?? 0.0;
+    final history = _summary?.records ?? const <CashHandoverRecord>[];
 
     return Column(children: [
       // ── Cash to hand over hero ──
@@ -631,7 +661,7 @@ class _CompanyCashSectionState extends State<_CompanyCashSection> {
       ),
       const SizedBox(height: 8),
 
-      if (_history.isEmpty)
+      if (history.isEmpty)
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 24),
@@ -641,7 +671,7 @@ class _CompanyCashSectionState extends State<_CompanyCashSection> {
               style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 12))),
         )
       else ...[
-        for (final h in _history) _HandoverCard(handover: h),
+        for (final h in history) _HandoverCard(handover: h),
         const SizedBox(height: 6),
         Container(
           width: double.infinity,
@@ -880,7 +910,26 @@ class _HandoverCard extends StatelessWidget {
             ],
           ]),
           const SizedBox(height: 3),
-          Text('${handover.dateLabel} · ${handover.confirmedBy ?? "—"}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted)),
+          // CLIENT-REPORTED (2026-08-13): confirmed live via a real
+          // response — a handover can be fully confirmed with BOTH
+          // date_label and handover_date null, and confirmed_by null too.
+          // The old unconditional "{date} · {confirmedBy}" rendered as a
+          // bare " · —" in that case, which looked broken even though the
+          // amount/confirmed status above it were correct. Now builds the
+          // subtitle only from whatever pieces actually exist, and shows
+          // the order code (already parsed but never displayed before) as
+          // useful context for which delivery this cash came from.
+          Builder(builder: (context) {
+            final parts = [
+              if (handover.code != null) '#${handover.code}',
+              if (handover.dateLabel.isNotEmpty) handover.dateLabel,
+              if (handover.confirmedBy != null) handover.confirmedBy!,
+            ];
+            return Text(
+              parts.isEmpty ? context.tr('handoverDetailsUnavailable') : parts.join(' · '),
+              style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted),
+            );
+          }),
         ])),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

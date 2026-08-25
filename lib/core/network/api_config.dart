@@ -43,10 +43,32 @@ class ApiConfig {
   static const String geocode       = '/geocode/{co}';          // GET — co = numeric order id (not code)
   static const String earnings      = '/earnings';              // GET
 
+  // ── Live location sharing (customer app "Track Order") ──────────
+  // REMOVED (2026-08-25): this was a guessed path — client confirmed
+  // live via Postman that it returns a genuine 404, "The route
+  // api/driver/orders/{co}/location could not be found." The entire
+  // feature (MapViewModel's location-sharing timer, OrderRepository's
+  // postLocation) was removed along with this, not just the constant.
+  // If this feature is still wanted, ask backend for the real endpoint
+  // first, then re-add it properly.
+
   // ── Delivery flow (co = numeric order id) ───────────────────
   static const String updateStatus = '/orders/{co}/status';         // POST {status: 'collecting'|'picked_up'|'on_the_way'} — CONFIRMED v2
+  // SUPERSEDED (2026-08-18) — the per-order endpoint below needed a loop
+  // of calls for anything beyond a single swap (move item #3 to #1 also
+  // displaces #1 and #2, needing their own follow-up calls to fix up).
+  // CLIENT-CONFIRMED: this bulk endpoint replaces it entirely — send the
+  // WHOLE new sequence as an array of co (numeric) ids in one call,
+  // first = top priority. Raw JSON body: {"order": [26300, 26292, ...]}.
+  // Response is minimal — {"ok": true, "updated": 1} — no resulting
+  // sequence handed back like the old endpoint gave, so there's nothing
+  // to reconcile against; the app dictated the whole order itself, so
+  // there's no ambiguity for backend to resolve differently.
+  static const String reorderAll = '/orders/reorder';                 // POST JSON {order: [co, co, ...]} — CONFIRMED
+  // Kept only as a comment for context — no longer called anywhere:
+  // static const String reorderActive = '/orders/{co}/position';     // POST form-data {position: int} — CONFIRMED, but superseded
   static const String arrive        = '/orders/{co}/arrive';               // POST
-  static const String pickupSeller  = '/orders/{co}/pickup/{seller}';      // POST — CONFIRMED v3: {seller} is the pharmacy NAME (e.g. "Royal Pharmacy"), not a numeric id like v2 suggested
+  static const String pickupSeller  = '/orders/{co}/pickup/{seller}';      // POST — CLIENT-CONFIRMED (2026-08-19) via a real backend SQL error: {seller} is the pharmacy's numeric seller_id, NOT the name as an earlier note claimed
   // CONFIRMED v3 example body only shows `pod_photo` — method/given/signature
   // are NOT shown anymore. UNCLEAR whether they were dropped from the
   // endpoint entirely or the example is just incomplete (Postman examples
@@ -82,16 +104,21 @@ class ApiConfig {
   static const String pickupToggle     = '/pickup/toggle';    // POST {seller: "Royal Pharmacy", picked: bool} — explicit on/off toggle, no longer "legacy"/order-based
 
   // ── Cash handover (Company Cash tab) ────────────────────────────
-  // NOT YET BUILT on the backend as of 2026-07-15 — this is prep so the
-  // client is ready to wire up the moment these exist. Every path/shape
-  // below is a best guess following this app's existing naming
-  // conventions, not a confirmed contract. Expect to adjust field names
-  // once these are actually hit for the first time (same pattern as
-  // every other "unconfirmed shape" endpoint in this file).
-  static const String cashBalance        = '/driver/cash-balance';             // GET -> {amount}
-  static const String cashHandovers      = '/driver/cash-handovers';           // GET -> {data: [{amount, method, date, confirmed_by, status}]}
-  static const String cashHandoverStart  = '/driver/cash-handover/start';      // POST -> {handover_id, token or qr_url, code, amount, expires_at}
-  static const String cashHandoverStatus = '/driver/cash-handover/{id}/status';// GET -> {status: pending|confirmed|expired}
+  // cashHandovers below is CONFIRMED LIVE (2026-08-11) — real shape is
+  // { handovers: [{co_id, code, amount (string!), status, confirmed,
+  // confirmed_by, handover_date, date_label}], total_handed_over,
+  // total_pending, currency }. cashBalance/cashHandoverStart/
+  // cashHandoverStatus are still unbuilt/unconfirmed guesses.
+  // CLIENT-REPORTED BUG (fixed): these four all had a redundant leading
+  // "/driver" — baseUrl above ALREADY ends in "/api/driver", same as
+  // every other path in this file (see orders/earnings/updateStatus
+  // etc., none of which repeat "/driver"). That extra prefix was
+  // producing .../api/driver/driver/cash-handovers instead of the
+  // correct .../api/driver/cash-handovers.
+  static const String cashBalance        = '/cash-balance';             // GET -> {amount} — UNCONFIRMED
+  static const String cashHandovers      = '/cash-handovers';           // GET — CONFIRMED, see CashHandoverSummary.fromJson
+  static const String cashHandoverStart  = '/cash-handover/start';      // POST -> {handover_id, token or qr_url, code, amount, expires_at} — UNCONFIRMED
+  static const String cashHandoverStatus = '/cash-handover/{id}/status';// GET -> {status: pending|confirmed|expired} — UNCONFIRMED
 
   // ── Path helpers ──────────────────────────────────────────────
   static String path(String template, Map<String, String> params) {

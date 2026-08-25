@@ -87,7 +87,7 @@ class RiderShell extends StatefulWidget {
   State<RiderShell> createState() => _RiderShellState();
 }
 
-class _RiderShellState extends State<RiderShell> {
+class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   // Phase: 'splash' | 'language' | 'login' | 'otp' | 'vehicle' | 'app'
   String _phase = 'splash';
   // Active screen within 'app'
@@ -105,11 +105,61 @@ class _RiderShellState extends State<RiderShell> {
   void _changeTab(String tab) => setState(() { _tab = tab; _screen = tab; });
   String? _screenBeforeMap;
   String? _capturedPodPhotoPath;
+  // CLIENT-REPORTED (2026-08-18): "amount given" wasn't showing up in the
+  // admin dashboard at all. Root cause found here — CashAmountScreen's
+  // onConfirm was discarding the entered amount entirely
+  // (`onConfirm: (_) => _goTo('photo')`), so by the time finish() ran,
+  // there was never a `given` value to send in the first place. Captured
+  // now, same pattern as _capturedPodPhotoPath below.
+  double? _capturedCashGiven;
+  // CLIENT-REPORTED: rider needs to be able to switch payment method at
+  // the door (customer changes their mind). PaymentScreen's Cash/KNET
+  // taps now record the ACTUAL method chosen here, keyed to the order id
+  // so it can never leak onto a different order's flow (e.g. one that
+  // skips PaymentScreen entirely because it's already paid online). This
+  // is read once at the signature step below and then cleared.
+  String? _paymentOverrideOrderId;
+  PayMethod? _paymentOverrideMethod;
+  // CLIENT-REQUESTED: auto shift on-open/off-close (see
+  // didChangeAppLifecycleState below). Captured in didChangeDependencies
+  // rather than read fresh wherever needed, same crash-safety reasoning
+  // as MapViewModel elsewhere in this app — a lifecycle callback can in
+  // principle fire at a point where a fresh context.read() isn't safe.
+  AppViewModel? _appVM;
+  // CLIENT-REPORTED (2026-08-19): every pharmacy's own "MAP" button
+  // opened the map for "the order" generically, which always shows
+  // order.primaryPharmacy (always the FIRST pharmacy) regardless of
+  // which pharmacy's card was actually tapped. Tracks which specific
+  // pharmacy (by seller id) to focus on; cleared when the map is opened
+  // generically (e.g. Home's "Maps" button, or the customer's own card).
+  int? _focusPharmacySellerId;
   void _openMapFor(Order order) => setState(() {
     _screenBeforeMap = _screen;
     _selectedOrderId = order.id;
+    _focusPharmacySellerId = null;
     _screen = 'map';
   });
+  void _openMapForPharmacy(Order order, Pharmacy pharmacy) => setState(() {
+    _screenBeforeMap = _screen;
+    _selectedOrderId = order.id;
+    _focusPharmacySellerId = pharmacy.sellerId;
+    _screen = 'map';
+  });
+  // CLIENT-REPORTED (2026-08-19): the multi-pharmacy pickup screen
+  // showed "Items to pick up (0)" even for orders that genuinely have
+  // items. Root cause: per-pharmacy item NAMES (Pharmacy.itemNames) only
+  // exist on the order-detail endpoint's response (GET /orders/{code})
+  // — the list endpoint (GET /orders?tab=all), which is what usually
+  // populates the order data already sitting in memory when this screen
+  // opens, only has a plain items_count number, no nested item list at
+  // all. None of this screen's entry points ever called refreshOrder(),
+  // so the fuller detail data was never fetched. Centralized here so
+  // every entry point gets it, rather than needing the fix repeated at
+  // each individual callback.
+  void _openMultiPickupFor(String orderId) {
+    setState(() { _selectedOrderId = orderId; _screen = 'multiPickup'; });
+    context.read<OrdersViewModel>().refreshOrder(orderId);
+  }
 
   StreamSubscription<void>? _pushRefreshSub;
   StreamSubscription<String>? _orderTapSub;
@@ -122,9 +172,18 @@ class _RiderShellState extends State<RiderShell> {
       context.read<OrdersViewModel>().load();
       context.read<OrdersViewModel>().startAutoRefresh(); // silent poll for newly-assigned orders
       context.read<OrdersViewModel>().startBatchPolling(); // tighter, dedicated poll for time-sensitive batch offers
+      // CLIENT-REPORTED (2026-08-13): GPS tracking used to start/stop with
+      // whichever map screen (Home or InAppMapScreen) happened to be
+      // mounted — since tabs fully rebuild rather than staying alive in
+      // an IndexedStack, rapid tab-switching meant repeatedly stopping
+      // and restarting the native location permission/stream setup,
+      // which visibly stalled the UI when triggered many times in quick
+      // succession. Started once here for the whole app session instead;
+      // only stops on logout (see the logout button below).
+      context.read<MapViewModel>().startTracking();
       NotificationService.instance.init(); // requests permission + registers FCM token with backend
       _pushRefreshSub = NotificationService.instance.onNewOrderPush.listen((_) {
-        if (mounted) context.read<OrdersViewModel>().refresh();
+        if (mounted) context.read<OrdersViewModel>().refresh(silent: true);
       });
       _orderTapSub = NotificationService.instance.onOrderTapped.listen(_handleOrderNotificationTap);
       NotificationService.instance.checkInitialMessage(); // was this app launch caused by tapping a push while fully closed?
@@ -141,7 +200,7 @@ class _RiderShellState extends State<RiderShell> {
   Future<void> _handleOrderNotificationTap(String orderId) async {
     final ordersVM = context.read<OrdersViewModel>();
     if (ordersVM.findById(orderId) == null) {
-      await ordersVM.refresh();
+      await ordersVM.refresh(silent: true); // already has a graceful fallback below if the order still isn't found
     }
     if (!mounted) return;
     if (ordersVM.findById(orderId) != null) {
@@ -161,6 +220,7 @@ class _RiderShellState extends State<RiderShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // for auto shift on-open/off-close below
     // Wait for the one-time session restore (see main()) then land on the
     // right phase — 'app' if a valid token was found, 'language' otherwise.
     // Splash stays on screen for that whole wait, so there's no flash of
@@ -175,6 +235,11 @@ class _RiderShellState extends State<RiderShell> {
       }
       if (!mounted) return;
       setState(() => _phase = appVM.isLoggedIn ? 'app' : 'language');
+      // CLIENT-REQUESTED: auto-on shift when the app opens. This covers
+      // the actual cold-start case — didChangeAppLifecycleState below
+      // only fires on lifecycle CHANGES, so it never sees the app's very
+      // first launch, only later resumes-from-background.
+      if (appVM.isLoggedIn) unawaited(appVM.setShiftAuto(true));
     });
 
     // Show ANY backend error message (e.g. "Pick up from all pharmacies
@@ -188,6 +253,35 @@ class _RiderShellState extends State<RiderShell> {
     context.read<OrdersViewModel>().addListener(_showOrdersError);
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _appVM = context.read<AppViewModel>();
+  }
+
+  /// CLIENT-REQUESTED: auto-on shift when the app comes to the
+  /// foreground, auto-off when it's backgrounded or closed. `paused` is
+  /// backgrounded-but-still-alive (home button, switching apps); `detached`
+  /// is the engine actually tearing down (task-swiped away, OS killing
+  /// it). Both mean "not in the driver's hands right now" so both turn
+  /// shift off. `inactive` (a transient state — e.g. a phone call
+  /// interrupting briefly, or a system dialog) is deliberately NOT
+  /// treated as "closed" — it's usually momentary, and flipping shift
+  /// off for something like an incoming call would be more disruptive
+  /// than helpful.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        unawaited(_appVM?.setShiftAuto(true));
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        unawaited(_appVM?.setShiftAuto(false));
+      default:
+        break;
+    }
+  }
+
   void _showOrdersError() {
     final vm = context.read<OrdersViewModel>();
     final msg = vm.error;
@@ -199,6 +293,7 @@ class _RiderShellState extends State<RiderShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     context.read<OrdersViewModel>().removeListener(_showOrdersError);
     context.read<OrdersViewModel>().stopAutoRefresh();
     context.read<OrdersViewModel>().stopBatchPolling();
@@ -275,7 +370,17 @@ class _RiderShellState extends State<RiderShell> {
   }
 
   Widget _buildAppScreen() {
-    final ordersVM = context.read<OrdersViewModel>();
+    // CLIENT-REPORTED (2026-08-19): the multi-pharmacy pickup screen kept
+    // showing "0 items" even though refreshOrder() was confirmed (via a
+    // real order-detail response) to have fetched the correct, complete
+    // data. Root cause: this used context.read, not context.watch — read
+    // gets the current value once but never subscribes to future
+    // changes, so when refreshOrder() finished and called
+    // notifyListeners() internally, nothing told this method to rebuild
+    // and re-read the now-correct data. The pendingBatch watch just
+    // above (in build()) already got this right, with a comment
+    // explaining exactly why — this just hadn't been applied here too.
+    final ordersVM = context.watch<OrdersViewModel>();
 
     switch (_screen) {
     // ── HOME ─────────────────────────────────────────────────
@@ -284,18 +389,29 @@ class _RiderShellState extends State<RiderShell> {
           onTabChange: _changeTab,
           onOpenOrder: (id) => setState(() { _selectedOrderId = id; _screen = 'orderDetail'; }),
           onOpenMap: _openMapFor,
-          onArrive: (id) {
+          onOpenMapForPharmacy: _openMapForPharmacy,
+          onTransitionState: (id, state) => ordersVM.transitionDriverState(id, state),
+          onMultiPickup: () => _openMultiPickupFor(ordersVM.activeOrder?.id ?? _selectedOrderId ?? ''),
+          onArrive: (id) async {
+            // CLIENT-REPORTED (2026-08-25): confirmed with a real order
+            // (paid: true both in the raw API response and shown
+            // correctly elsewhere in the app) that swiping "arrived"
+            // still opened the payment screen showing "NOT PAID YET".
+            // Root cause: this only ever read whatever was ALREADY
+            // cached in memory — if the admin dashboard marks an order
+            // paid, that change lives on backend's side until the app's
+            // own next scheduled refresh (every 20s) or the driver
+            // happens to open Order Detail. Swiping "arrived" in that
+            // gap meant deciding based on stale data. The paid-check
+            // logic itself was already correct (see the "paid is true
+            // then skip" fix above) — this fetches a fresh copy right
+            // before making that decision, rather than trusting
+            // whatever might be several seconds (or more) out of date.
+            await ordersVM.refreshOrder(id);
             final order = ordersVM.findById(id);
             setState(() {
               _selectedOrderId = id;
-              // URGENT FIX (client-reported): a cash order must NEVER skip
-              // straight to photo/signature just because order.paid says
-              // true — paid alone only means "already settled online"
-              // (knet/link), which is trustworthy from backend. Cash can
-              // ONLY be confirmed by the driver physically collecting it
-              // via CashAmountScreen — the paid flag being (correctly or
-              // incorrectly) true must never bypass that for a cash order.
-              final canSkipPayment = order != null && order.paid && order.payMethod != PayMethod.cash;
+              final canSkipPayment = order != null && order.paid;
               _screen = canSkipPayment ? 'photo' : 'payment';
             });
           },
@@ -308,11 +424,15 @@ class _RiderShellState extends State<RiderShell> {
           onTabChange: _changeTab,
           onOpenOrder: (id) => setState(() { _selectedOrderId = id; _screen = 'orderDetail'; }),
           onOpenMap: _openMapFor,
+          onOpenMapForPharmacy: _openMapForPharmacy,
+          onTransitionState: (id, state) => ordersVM.transitionDriverState(id, state),
+          onMultiPickup: () => _openMultiPickupFor(ordersVM.activeOrder?.id ?? _selectedOrderId ?? ''),
           onArrive: (id) => setState(() => _screen = 'home'),
         );
         return InAppMapScreen(
           order: mapOrder,
           onBack: () => _goTo(_screenBeforeMap ?? 'home'),
+          focusPharmacySellerId: _focusPharmacySellerId,
         );
 
     // ── ORDERS ───────────────────────────────────────────────
@@ -326,6 +446,7 @@ class _RiderShellState extends State<RiderShell> {
             ordersVM.acceptCallRequest(id);
             setState(() { _selectedOrderId = id; _screen = 'orderDetail'; });
           },
+          onOpenMultiPickup: (id) => _openMultiPickupFor(id),
         );
 
     // ── ORDER DETAIL ──────────────────────────────────────────
@@ -334,11 +455,37 @@ class _RiderShellState extends State<RiderShell> {
         return OrderDetailScreen(
           orderId: orderId,
           onBack: () => _goTo(_tab),
-          onArrive: () => _goTo('payment'),
+          // CLIENT-REPORTED (2026-08-25) via video, confirmed with a
+          // real order (APM36104, paid:true, pay_method:cash): swiping
+          // "arrived" from Order Detail specifically still opened the
+          // Collect Payment screen showing "NOT PAID YET" despite the
+          // order genuinely being paid. Root cause: this is a
+          // completely SEPARATE onArrive callback from HomeScreen's
+          // (different signature — plain VoidCallback here vs
+          // ValueChanged<String> there) — the earlier fix for this
+          // exact "paid should skip straight to photo" behavior was
+          // only ever applied to HomeScreen's callback. This one always
+          // unconditionally went to 'payment' with no paid check at
+          // all. Same fix, same client confirmation ("paid is true
+          // then skip", no exception for cash) applied here too.
+          onArrive: () async {
+            // CLIENT-REPORTED (2026-08-25): same staleness issue as
+            // HomeScreen's onArrive above — this only read whatever was
+            // already cached, which can be several seconds (or more)
+            // out of date if an external system (the admin dashboard)
+            // marked the order paid since the app's last refresh.
+            // Fetches a fresh copy right before deciding, rather than
+            // trusting a potentially stale cache for this decision.
+            await ordersVM.refreshOrder(orderId);
+            final order = ordersVM.findById(orderId);
+            final canSkipPayment = order != null && order.paid;
+            _goTo(canSkipPayment ? 'photo' : 'payment');
+          },
           onCantDeliver: () => _goTo('failedDelivery'),
           onTransitionState: (id, state) => ordersVM.transitionDriverState(id, state as DriverState),
-          onMultiPickup: () => _goTo('multiPickup'),
+          onMultiPickup: () => _openMultiPickupFor(orderId),
           onOpenMap: _openMapFor,
+          onOpenMapForPharmacy: _openMapForPharmacy,
         );
 
     // ── PAYMENT ───────────────────────────────────────────────
@@ -347,9 +494,17 @@ class _RiderShellState extends State<RiderShell> {
         return PaymentScreen(
           order: order,
           onBack: () => _goTo('orderDetail'),
-          onCollectCash: () => _goTo('cashAmount'),        // cash → enter amount
-          onCollectKnet: () => _goTo('photo'),             // knet → straight to photo
-          onSendLink: () => _goTo('sendLink'),             // link → send link screen
+          onCollectCash: () {
+            _paymentOverrideOrderId = order.id;
+            _paymentOverrideMethod = PayMethod.cash;
+            _goTo('cashAmount');        // cash → enter amount
+          },
+          onCollectKnet: () {
+            _paymentOverrideOrderId = order.id;
+            _paymentOverrideMethod = PayMethod.knet;
+            _goTo('photo');             // knet → straight to photo
+          },
+          onSendLink: () => _goTo('sendLink'), // link → send link screen (async, doesn't reach signature this session)
         );
 
       case 'cashAmount':
@@ -357,7 +512,10 @@ class _RiderShellState extends State<RiderShell> {
         return CashAmountScreen(
           order: order,
           onBack: () => _goTo('payment'),
-          onConfirm: (_) => _goTo('photo'),               // cash confirmed → photo
+          onConfirm: (given) {
+            _capturedCashGiven = given;
+            _goTo('photo');
+          },
         );
 
       case 'sendLink':
@@ -385,7 +543,15 @@ class _RiderShellState extends State<RiderShell> {
           order: order,
           onBack: () => _goTo('photo'),
           onSigned: (signatureBase64) {
-            final methodStr = OrderRepository.methodForOrder(order);
+            // Use whatever the rider actually tapped on PaymentScreen for
+            // THIS order, if anything was recorded — otherwise fall back
+            // to the order's originally recorded method (covers orders
+            // that skip PaymentScreen entirely, e.g. already paid online).
+            final methodStr = (_paymentOverrideOrderId == order.id && _paymentOverrideMethod != null)
+                ? (_paymentOverrideMethod == PayMethod.knet ? 'knet' : 'cash')
+                : OrderRepository.methodForOrder(order);
+            _paymentOverrideOrderId = null;
+            _paymentOverrideMethod = null;
             final photoPath = _capturedPodPhotoPath;
             if (photoPath == null) {
               // Shouldn't happen (photo step is required before this one),
@@ -395,10 +561,17 @@ class _RiderShellState extends State<RiderShell> {
               _goTo('photo');
               return;
             }
-            ordersVM.markDelivered(order.id, payMethod: methodStr, podPhotoPath: photoPath, signatureBase64: signatureBase64);
+            ordersVM.markDelivered(
+              order.id,
+              payMethod: methodStr,
+              podPhotoPath: photoPath,
+              signatureBase64: signatureBase64,
+              given: _capturedCashGiven?.toStringAsFixed(3),
+            );
             context.read<AppViewModel>().addEarnings(order.total * 0.15);
             _lastDeliveredId = order.id;
             _capturedPodPhotoPath = null;
+            _capturedCashGiven = null;
             _goTo('success');
           },
         );
@@ -454,16 +627,34 @@ class _RiderShellState extends State<RiderShell> {
             ordersVM.transitionDriverState(order.id, DriverState.pickedUp);
             _goTo('orderDetail');
           },
+          onOpenMapForPharmacy: (pharmacy) => _openMapForPharmacy(order, pharmacy),
         );
 
       case 'pharmacyStop':
         final order = ordersVM.findById(_selectedOrderId ?? '')!;
         return SinglePharmacyStopScreen(
           order: order,
-          phId: _selectedPhId ?? '',
+          sellerKey: _selectedPhId ?? '',
           onBack: () => _goTo('multiPickup'),
-          onConfirmPickup: () {
-            ordersVM.markPharmacyPickedUp(order.id, _selectedPhId ?? '');
+          onConfirmPickup: () async {
+            Pharmacy? pharmacy;
+            for (final p in order.pharmacies) {
+              if ('${p.sellerId ?? p.name}' == (_selectedPhId ?? '')) { pharmacy = p; break; }
+            }
+            if (pharmacy != null) {
+              // CLIENT-REPORTED (2026-08-19): this used to update local
+              // state and silently swallow any backend failure — the
+              // app would show "picked up" even if backend had zero
+              // record of it, with nothing telling the driver. Now
+              // shows an honest result either way, same pattern as
+              // reorderActive's toast.
+              final synced = await ordersVM.markPharmacyPickedUp(order.id, pharmacy);
+              if (mounted) {
+                showWToast(context, synced
+                    ? '✅ Pickup confirmed for ${pharmacy.name}'
+                    : "⚠️ Marked locally, but couldn't save to the server — it may not persist");
+              }
+            }
             _goTo('multiPickup');
           },
         );
@@ -480,6 +671,7 @@ class _RiderShellState extends State<RiderShell> {
           onLogout: () {
             context.read<OrdersViewModel>().stopAutoRefresh();
             context.read<OrdersViewModel>().stopBatchPolling();
+            context.read<MapViewModel>().stopTracking(); // tracking now starts once app-wide (see _ensureOrdersLoaded) — stop it here on logout instead of per-screen
             _pushRefreshSub?.cancel();
             _pushRefreshSub = null;
             _orderTapSub?.cancel();
@@ -499,12 +691,18 @@ class _RiderShellState extends State<RiderShell> {
           onTabChange: _changeTab,
           onOpenOrder: (id) => setState(() { _selectedOrderId = id; _screen = 'orderDetail'; }),
           onOpenMap: _openMapFor,
-          onArrive: (id) {
+          onOpenMapForPharmacy: _openMapForPharmacy,
+          onTransitionState: (id, state) => ordersVM2.transitionDriverState(id, state),
+          onMultiPickup: () => _openMultiPickupFor(ordersVM2.activeOrder?.id ?? _selectedOrderId ?? ''),
+          onArrive: (id) async {
+            // CLIENT-REPORTED (2026-08-25): same staleness fix as the
+            // other two onArrive occurrences — see the first one above
+            // for the full explanation.
+            await ordersVM2.refreshOrder(id);
             final order = ordersVM2.findById(id);
             setState(() {
               _selectedOrderId = id;
-              // Same urgent fix as the other onArrive above — see comment there.
-              final canSkipPayment = order != null && order.paid && order.payMethod != PayMethod.cash;
+              final canSkipPayment = order != null && order.paid;
               _screen = canSkipPayment ? 'photo' : 'payment';
             });
           },

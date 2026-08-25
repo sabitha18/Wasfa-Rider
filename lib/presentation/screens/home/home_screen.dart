@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -12,12 +13,59 @@ import 'package:wasfa_rider/presentation/viewmodels/map_viewmodel.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 
+/// CLIENT-REQUESTED (2026-08-18): backend's own distance_km field has
+/// been null on every single order response seen live so far, so
+/// order.distanceKm always shows as a static 0. This computes a real,
+/// live, continuously-updating STRAIGHT-LINE distance from the driver's
+/// actual GPS position instead — not a true driving-route distance
+/// (that needs the Directions API, a paid Google Cloud API whose key
+/// shouldn't be embedded directly in the app, or backend finally
+/// populating distance_km itself), but a genuine number that updates as
+/// the driver moves, rather than a permanent placeholder zero.
+// CLIENT-REPORTED (2026-08-22): moved to shared_widgets.dart as a public
+// haversineKm() so order_detail_screen.dart can use the same real
+// distance calculation instead of duplicating this math — that screen's
+// own header had the identical "always 0.0 km" bug this originally fixed.
+
+/// Accumulator for pharmacyAgg in _HomeMapState.build — holds the item
+/// count from whichever order currently "wins" for this pharmacy (the
+/// active order if it references this pharmacy, otherwise the lowest
+/// stop number among the rest) — see the preference logic in build().
+class _PharmacyAgg {
+  final String name;
+  final LatLng pos;
+  final int itemsCount;
+  final bool isActive;
+  final int stopNumber;
+  _PharmacyAgg(this.name, this.pos, this.itemsCount, this.isActive, this.stopNumber);
+}
+
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.onTabChange, required this.onOpenOrder, required this.onArrive, required this.onOpenMap});
+  const HomeScreen({
+    super.key,
+    required this.onTabChange,
+    required this.onOpenOrder,
+    required this.onArrive,
+    required this.onOpenMap,
+    required this.onOpenMapForPharmacy,
+    required this.onTransitionState,
+    required this.onMultiPickup,
+  });
   final ValueChanged<String> onTabChange;
   final ValueChanged<String> onOpenOrder;
-  final ValueChanged<String> onArrive; // called with order id when swipe fires
+  final ValueChanged<String> onArrive; // called with order id once the FINAL "arrived" swipe fires
   final ValueChanged<Order> onOpenMap; // opens the in-app map for this order
+  // CLIENT-REPORTED (2026-08-22): the "Maps" quick action always opened
+  // the map for "the order" generically, which defaults to
+  // order.primaryPharmacy — for a multi-pharmacy order, once the first
+  // pharmacy was picked up, this kept pointing at that same (now done)
+  // pharmacy instead of the next one still needing a visit.
+  final void Function(Order order, Pharmacy pharmacy) onOpenMapForPharmacy;
+  // Same driver-state sequence as OrderDetailScreen's _DriverActionBar —
+  // the Home map card must walk pending -> collecting -> pickedUp -> onMyWay
+  // too, not jump straight to "swipe when arrived".
+  final void Function(String id, DriverState state) onTransitionState;
+  final VoidCallback onMultiPickup;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -36,6 +84,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final hasMultipleStops = ordersVM.orders
         .where((o) => [OrderStatus.next, OrderStatus.later, OrderStatus.batchPending].contains(o.status))
         .isNotEmpty;
+
+    // REMOVED (2026-08-25): this used to trigger MapViewModel's
+    // live-location-sharing timer, which called a guessed endpoint
+    // confirmed to be a genuine 404 — see MapViewModel's own note on
+    // this. Removed here along with the feature itself.
 
     return Scaffold(
       body: Column(children: [
@@ -69,7 +122,12 @@ class _HomeScreenState extends State<HomeScreen> {
               top: 144, right: 14,
               child: _fab(icon: Icons.refresh, onTap: () async {
                 await ordersVM.refresh();
-                if (mounted) showWToast(context, 'Orders refreshed');
+                if (!mounted) return;
+                // load() catches its own exceptions and never rethrows, so
+                // this must check the error field explicitly — otherwise
+                // this "refreshed" toast would show even on a genuine
+                // failure, right alongside the separate red error banner.
+                showWToast(context, ordersVM.error == null ? 'Orders refreshed' : "Couldn't refresh — check your connection");
               }),
             ),
             // Tap-pin hint
@@ -136,6 +194,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   order: active,
                   onOpen: () => widget.onOpenOrder(active.id),
                   onOpenMap: widget.onOpenMap,
+                  onOpenMapForPharmacy: widget.onOpenMapForPharmacy,
+                  onTransitionState: widget.onTransitionState,
+                  onMultiPickup: widget.onMultiPickup,
                   onArrive: () {
                     ordersVM.arriveAtPatient(active.id);
                     final id = active.id;
@@ -195,14 +256,36 @@ class _HomeMapState extends State<_HomeMap> {
   GoogleMapController? _controller;
   final _orderRepo = OrderRepository();
   final Map<String, LatLng> _pins = {};  // orderId -> resolved coordinate
-  final Set<String> _requested = {};     // orderIds already geocoded (or attempted)
+  final Set<String> _requested = {};     // "orderId:isHeadingToPharmacy" keys already resolved (or attempted)
   bool _didInitialFit = false;
+  // CLIENT-REPORTED CRASH: dispose() was calling context.read<MapViewModel>()
+  // directly, which threw "Looking up a deactivated widget's ancestor is
+  // unsafe" — this widget can be torn down as part of a larger unmount
+  // (e.g. the whole app screen swapping away quickly), by which point its
+  // context is no longer safe to walk up from. Capture the reference here
+  // in didChangeDependencies instead (guaranteed to run with a valid,
+  // active context) and use ONLY this stored reference in dispose(),
+  // never a fresh context.read() at that point.
+  MapViewModel? _mapVM;
+  BitmapDescriptor? _pharmacyIcon;
 
   @override
   void initState() {
     super.initState();
-    context.read<MapViewModel>().startTracking();
     _geocodeVisibleOrders();
+    // CLIENT-REQUESTED: show pharmacy pickup location(s) on the Home map
+    // too, not just the customer/destination pins.
+    PharmacyMarkerIcon.get().then((icon) { if (mounted) setState(() => _pharmacyIcon = icon); });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final vm = context.read<MapViewModel>();
+    if (_mapVM != vm) {
+      _mapVM = vm;
+      vm.startTracking();
+    }
   }
 
   @override
@@ -214,13 +297,29 @@ class _HomeMapState extends State<_HomeMap> {
   void _geocodeVisibleOrders() {
     for (final o in widget.orders) {
       if (o.status == OrderStatus.failed) continue;
-      if (_requested.contains(o.id)) continue;
-      _requested.add(o.id);
+      // CLIENT-REPORTED (2026-08-18): keyed on order id alone before, so
+      // an order's pin — once resolved to the customer's address — never
+      // got a chance to switch to the pharmacy's location even after
+      // transitioning into heading-to-pharmacy/collecting. Keying on
+      // phase too means a transition triggers a fresh resolution.
+      final key = '${o.id}:${o.isHeadingToPharmacy}';
+      if (_requested.contains(key)) continue;
+      _requested.add(key);
       _resolveOrder(o);
     }
   }
 
   Future<void> _resolveOrder(Order o) async {
+    // The pin for THIS order on the inline map — resolve to the
+    // pharmacy's own coordinates while heading there/collecting, same
+    // priority InAppMapScreen already uses for the full "Maps" screen.
+    // Previously this always geocoded the CUSTOMER's address regardless
+    // of phase, showing the wrong location during pharmacy pickup.
+    final pharmacy = o.nextUnpickedPharmacy;
+    if (o.isHeadingToPharmacy && pharmacy != null && pharmacy.hasCoords) {
+      setState(() => _pins[o.id] = LatLng(pharmacy.lat!, pharmacy.lng!));
+      return;
+    }
     try {
       final result = await _orderRepo.geocodeOrder(o.co ?? o.id);
       if (!mounted || result == null) {
@@ -266,6 +365,34 @@ class _HomeMapState extends State<_HomeMap> {
       _controller!.animateCamera(CameraUpdate.newLatLngZoom(driver, 15));
     }
 
+    // CLIENT-REPORTED (2026-08-18): confirmed live — a pharmacy marker
+    // showed "1 item" when the order actually being worked on needed 2
+    // from that same pharmacy. First attempt at fixing this summed
+    // items_count across every order sharing that pharmacy — wrong
+    // call, since that produces a total unrelated to any single order
+    // (e.g. "6 items" when the active order only needs 2), which is
+    // arguably more confusing than the original bug. What's actually
+    // wanted: the marker should match whatever the swipe card ALREADY
+    // correctly shows for the order the driver is currently working on.
+    // Prefer the ACTIVE order's own item count for a shared pharmacy;
+    // only fall back to another order's count (lowest stop number)
+    // when the active order doesn't reference that pharmacy at all.
+    final Map<String, _PharmacyAgg> pharmacyAgg = {};
+    for (final o in widget.orders) {
+      if (o.status == OrderStatus.failed) continue;
+      for (final p in o.pharmacies) {
+        if (!p.hasCoords) continue;
+        final key = '${p.sellerId ?? p.name}';
+        final existing = pharmacyAgg[key];
+        final thisIsBetter = existing == null
+            || (o.status == OrderStatus.active && existing.isActive != true)
+            || (o.status != OrderStatus.active && existing.isActive != true && o.stopNumber < existing.stopNumber);
+        if (thisIsBetter) {
+          pharmacyAgg[key] = _PharmacyAgg(p.name, LatLng(p.lat!, p.lng!), p.itemsCount, o.status == OrderStatus.active, o.stopNumber);
+        }
+      }
+    }
+
     final markers = <Marker>{
       if (driver != null)
         Marker(
@@ -284,6 +411,19 @@ class _HomeMapState extends State<_HomeMap> {
             infoWindow: InfoWindow(title: 'Stop ${o.stopNumber} — ${o.patient}', snippet: o.addr1),
             onTap: o.status == OrderStatus.active ? null : () => widget.onPinTap(o.id),
           ),
+      // CLIENT-REQUESTED: pharmacy pickup location(s) for every visible
+      // order — see pharmacyAgg above for why these are aggregated
+      // across orders rather than built one-per-order.
+      for (final entry in pharmacyAgg.entries)
+        Marker(
+          markerId: MarkerId('pharmacy_${entry.key}'),
+          position: entry.value.pos,
+          icon: _pharmacyIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: InfoWindow(
+            title: entry.value.name,
+            snippet: '${entry.value.itemsCount} item${entry.value.itemsCount == 1 ? '' : 's'}',
+          ),
+        ),
     };
 
     return GoogleMap(
@@ -301,7 +441,17 @@ class _HomeMapState extends State<_HomeMap> {
 
   @override
   void dispose() {
-    context.read<MapViewModel>().stopTracking();
+    // CLIENT-REPORTED (2026-08-13): rapid Home <-> Orders <-> Profile
+    // tab-switching made the app appear stuck. Root cause: tabs aren't a
+    // persistent IndexedStack — main.dart fully disposes/rebuilds each
+    // screen on every switch — so stopping tracking here meant every
+    // single Home mount had to redo the full _ensurePermission()
+    // native-channel round-trip in startTracking(), which can queue up
+    // and visibly stall the UI when triggered many times in quick
+    // succession. Tracking now starts once, app-wide, in main.dart's
+    // one-time setup, and only stops on logout — not on every Home
+    // dispose, since another screen (or the next Home mount seconds
+    // later) will just need it again anyway.
     super.dispose();
   }
 }
@@ -312,10 +462,15 @@ class _ActiveOrderCard extends StatefulWidget {
     required this.onOpen,
     required this.onArrive,
     required this.onOpenMap,
+    required this.onOpenMapForPharmacy,
+    required this.onTransitionState,
+    required this.onMultiPickup,
   });
   final Order order;
-  final VoidCallback onOpen, onArrive;
+  final VoidCallback onOpen, onArrive, onMultiPickup;
   final ValueChanged<Order> onOpenMap;
+  final void Function(Order order, Pharmacy pharmacy) onOpenMapForPharmacy;
+  final void Function(String id, DriverState state) onTransitionState;
 
   @override
   State<_ActiveOrderCard> createState() => _ActiveOrderCardState();
@@ -323,6 +478,37 @@ class _ActiveOrderCard extends StatefulWidget {
 
 class _ActiveOrderCardState extends State<_ActiveOrderCard> {
   bool _expanded = true;
+  // CLIENT-REPORTED (2026-08-25): confirmed live — an order can have a
+  // genuine, complete text address (addr1/addr2/addr_full all populated)
+  // while its own lat/lng fields are null. The distance calculation
+  // only ever checked the raw lat/lng, so it showed "No address on
+  // file" — misleading wording, since the order genuinely DOES have an
+  // address, just not coordinates for it yet.
+  //
+  // CLIENT-ASKED (2026-08-25) follow-up: what if lat/lng are missing
+  // but map_link is present? A map_link is a human-verified location —
+  // generally MORE reliable than geocoding a free-text address — so it
+  // needs to be tried BEFORE geocoding, not skipped. Matches the exact
+  // same "lat/lng > map_link > geocode" priority the map screens
+  // already use (see OrderRepository.resolveMapLinkCoords).
+  final _orderRepo = OrderRepository();
+  final Map<String, LatLng?> _geocodedCustomerPins = {};
+  final Set<String> _geocodeAttempted = {};
+
+  LatLng? _resolveCustomerPin(Order order) {
+    if (_geocodedCustomerPins.containsKey(order.id)) return _geocodedCustomerPins[order.id];
+    if (_geocodeAttempted.contains(order.id)) return null;
+    _geocodeAttempted.add(order.id);
+    Future<({double lat, double lng})?> resolve() {
+      if (order.mapLink != null) return _orderRepo.resolveMapLinkCoords(order.mapLink!);
+      return _orderRepo.geocodeOrder(order.co ?? order.id);
+    }
+    resolve().then((result) {
+      if (!mounted) return;
+      setState(() => _geocodedCustomerPins[order.id] = result != null ? LatLng(result.lat, result.lng) : null);
+    });
+    return null;
+  }
 
   void _toggle() => setState(() => _expanded = !_expanded);
 
@@ -413,61 +599,261 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
             secondChild: Padding(
               padding: const EdgeInsets.only(top: 14),
               child: Column(children: [
-                // Address block
-                GestureDetector(
-                  onTap: widget.onOpen,
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [WTheme.rose.withOpacity(0.06), WTheme.blush],
+                // Address block — CLIENT-REQUESTED (2026-08-13): shows the
+                // PHARMACY's pickup location while heading there/collecting
+                // (steps 1-2), not the customer's address — that's not
+                // where the driver needs to go yet. Switches back to the
+                // customer automatically from pickedUp onward.
+                Builder(builder: (context) {
+                  // CLIENT-REPORTED (2026-08-22): once the first of
+                  // several pharmacies was marked picked up, this card
+                  // (and its Maps/Waze/Call buttons) kept showing that
+                  // same first pharmacy forever, with the swipe button
+                  // stuck on "Open pickup checklist" regardless of
+                  // progress. nextUnpickedPharmacy correctly moves on to
+                  // whichever pharmacy still needs collecting.
+                  final showingPharmacy = order.isHeadingToPharmacy && order.nextUnpickedPharmacy != null;
+                  final pharmacy = order.nextUnpickedPharmacy;
+                  final accent = showingPharmacy ? const Color(0xFF2ECC71) : WTheme.rose;
+                  // CLIENT-REPORTED (2026-08-22) follow-up: my previous
+                  // fix only explained the "driver's own GPS missing"
+                  // case — a bare, unexplained "—" (no km/min attempted
+                  // at all) means driverPos is actually NON-null (GPS
+                  // working), and destPos (the pharmacy/customer's own
+                  // coordinates) is the missing piece instead, which
+                  // this never distinguished. Now covers every case.
+                  final mapVM = context.watch<MapViewModel>();
+                  final driverPos = mapVM.driverPosition;
+                  LatLng? destPos;
+                  if (showingPharmacy && pharmacy!.hasCoords) {
+                    destPos = LatLng(pharmacy.lat!, pharmacy.lng!);
+                  } else if (!showingPharmacy) {
+                    final hasRealPin = !(order.pinPos.leftFraction == 0.5 && order.pinPos.topFraction == 0.5);
+                    // CLIENT-REPORTED (2026-08-25): confirmed live — an
+                    // order can have a complete text address
+                    // (addr1/addr2/addr_full all populated) while its
+                    // own lat/lng fields are null. This used to just
+                    // give up in that case, showing "No address on
+                    // file" — misleading, since the address genuinely
+                    // exists, just not geocoded yet. Falls back to
+                    // resolving it the same way the map screens already
+                    // do, via _resolveCustomerPin below.
+                    destPos = hasRealPin
+                        ? LatLng(order.pinPos.topFraction, order.pinPos.leftFraction)
+                        : _resolveCustomerPin(order);
+                  }
+                  final live = liveDistanceAndEta(driverPos, destPos);
+                  final liveDistanceKm = live.km;
+                  final liveEtaMin = live.etaMin;
+                  // Only the "driver's own GPS missing" case is
+                  // something the driver can act on (retry/Settings) —
+                  // a missing destination coordinate is a data problem
+                  // backend needs to fix, and a rejected reading (both
+                  // positions exist but the result was unrealistic)
+                  // needs a fresh GPS fix, not a permission dialog.
+                  final gpsIsActionable = driverPos == null;
+                  // CLIENT-REPORTED (2026-08-25): reworded to be
+                  // specific about what's actually missing — the order
+                  // can genuinely have a full address on file, just no
+                  // coordinates for it (yet, until geocoding resolves,
+                  // or if it never can be geocoded at all).
+                  final gpsStatusText = liveDistanceKm != null
+                      ? null
+                      : driverPos == null
+                          ? (mapVM.error != null ? 'No GPS ↻' : 'GPS…')
+                          : destPos == null
+                              ? (showingPharmacy ? 'No pharmacy coords' : 'Locating address…')
+                              : 'GPS unclear';
+                  return GestureDetector(
+                    onTap: widget.onOpen,
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft, end: Alignment.bottomRight,
+                          colors: [accent.withOpacity(0.06), WTheme.blush],
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border(left: BorderSide(color: accent, width: 4)),
                       ),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border(left: BorderSide(color: WTheme.rose, width: 4)),
-                    ),
-                    child: Row(children: [
-                      Text('📍', style: TextStyle(color: WTheme.rose, fontSize: 22)),
-                      const SizedBox(width: 12),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(order.addr1, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 17, color: WTheme.navy, letterSpacing: -0.3)),
-                        const SizedBox(height: 3),
-                        Text(order.addr2, style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.ink, fontWeight: FontWeight.w600)),
-                        if (order.landmark != null) ...[
-                          const SizedBox(height: 4),
-                          Text('· ${order.landmark}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontStyle: FontStyle.italic)),
-                        ],
-                      ])),
-                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                        Text('${order.distanceKm}', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 16, color: WTheme.navy)),
-                        Text(context.tr('km'), style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                      child: Row(children: [
+                        Text(showingPharmacy ? '💊' : '📍', style: TextStyle(color: accent, fontSize: 22)),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          if (showingPharmacy) ...[
+                            Row(children: [
+                              Text('PHARMACY PICKUP', style: GoogleFonts.dmSans(
+                                  fontSize: 10, fontWeight: FontWeight.w800, color: accent, letterSpacing: 0.5)),
+                              // CLIENT-REPORTED (2026-08-18): this card
+                              // only ever showed the FIRST pharmacy —
+                              // an order with items from 2+ different
+                              // pharmacies gave no indication a second
+                              // stop existed at all. This card is too
+                              // compact to show full details per
+                              // pharmacy, so at minimum flag that more
+                              // exist and point at the full checklist.
+                              // CLIENT-REPORTED (2026-08-22): this
+                              // counted total-1 regardless of picked
+                              // status, so it kept showing "+1 MORE"
+                              // even once only one pharmacy genuinely
+                              // remained. Now counts remaining UNPICKED
+                              // pharmacies specifically, excluding
+                              // whichever one is currently shown above.
+                              if (order.pharmacies.where((p) => !p.pickedUp).length > 1) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                  decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(999)),
+                                  child: Text('+${order.pharmacies.where((p) => !p.pickedUp).length - 1} MORE', style: GoogleFonts.dmSans(
+                                      fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white)),
+                                ),
+                              ],
+                            ]),
+                            const SizedBox(height: 2),
+                            Text(pharmacy!.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 17, color: WTheme.navy, letterSpacing: -0.3)),
+                            const SizedBox(height: 2),
+                            Text('${pharmacy.itemsCount} item${pharmacy.itemsCount == 1 ? '' : 's'}',
+                                style: GoogleFonts.dmSans(fontSize: 12, color: accent, fontWeight: FontWeight.w700)),
+                            if (pharmacy.address != null) ...[
+                              const SizedBox(height: 3),
+                              Text(pharmacy.address!, style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.ink, fontWeight: FontWeight.w600)),
+                            ],
+                          ] else ...[
+                            Text(order.addr1, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 17, color: WTheme.navy, letterSpacing: -0.3)),
+                            const SizedBox(height: 3),
+                            Text(order.addr2, style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.ink, fontWeight: FontWeight.w600)),
+                            if (order.landmark != null) ...[
+                              const SizedBox(height: 4),
+                              Text('· ${order.landmark}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontStyle: FontStyle.italic)),
+                            ],
+                          ],
+                        ])),
+                        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                          if (liveDistanceKm != null) ...[
+                            Text(
+                              liveDistanceKm < 1 ? '${(liveDistanceKm * 1000).round()}' : liveDistanceKm.toStringAsFixed(1),
+                              style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 16, color: WTheme.navy),
+                            ),
+                            Text(liveDistanceKm < 1 ? 'm' : context.tr('km'), style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                            if (liveEtaMin != null) ...[
+                              const SizedBox(height: 2),
+                              Text('~$liveEtaMin min', style: GoogleFonts.dmSans(fontSize: 10, color: accent, fontWeight: FontWeight.w800)),
+                            ],
+                          ] else
+                            // CLIENT-REPORTED (2026-08-22): originally
+                            // only explained "driver's own GPS missing"
+                            // — a bare, unexplained "—" meant destPos
+                            // (the pharmacy/customer's own coordinates)
+                            // was the actual missing piece instead,
+                            // which wasn't distinguished at all. Now
+                            // covers every case (see gpsStatusText
+                            // above) — only the driver-GPS case is
+                            // actually tappable (retry/Settings); a
+                            // missing destination coordinate is a data
+                            // problem backend needs to fix, not
+                            // something re-asking permission can solve.
+                            GestureDetector(
+                              onTap: gpsIsActionable ? () => mapVM.retryLocationPermission() : null,
+                              child: Text(
+                                gpsStatusText ?? '—',
+                                style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, fontSize: 11,
+                                    color: gpsIsActionable && mapVM.error != null ? WTheme.rose : WTheme.muted,
+                                    decoration: gpsIsActionable && mapVM.error != null ? TextDecoration.underline : null),
+                              ),
+                            ),
+                        ]),
                       ]),
-                    ]),
-                  ),
-                ),
+                    ),
+                  );
+                }),
                 const SizedBox(height: 12),
-                // Quick actions
+                // Quick actions — target the pharmacy while heading
+                // there/collecting, the customer otherwise (see above).
                 Row(children: [
-                  Expanded(child: QuickActionBtn(emoji: '🗺', label: context.tr('maps'), color: const Color(0xFF4285F4), onTap: () => widget.onOpenMap(order))),
+                  Expanded(child: QuickActionBtn(emoji: '🗺', label: context.tr('maps'), color: const Color(0xFF4285F4), onTap: () {
+                    final nextPharmacy = order.nextUnpickedPharmacy;
+                    if (order.isHeadingToPharmacy && nextPharmacy != null) {
+                      widget.onOpenMapForPharmacy(order, nextPharmacy);
+                    } else {
+                      widget.onOpenMap(order);
+                    }
+                  })),
                   const SizedBox(width: 8),
                   Expanded(child: QuickActionBtn(emoji: '🚗', label: context.tr('waze'), color: const Color(0xFF33CCFF), onTap: () => _openWaze(order))),
                   const SizedBox(width: 8),
-                  Expanded(child: QuickActionBtn(emoji: '📞', label: context.tr('call'), color: WTheme.ok, onTap: () => _call(order.phone))),
+                  Expanded(child: QuickActionBtn(emoji: '📞', label: context.tr('call'), color: WTheme.ok,
+                      onTap: () => _call((order.isHeadingToPharmacy ? order.nextUnpickedPharmacy?.phone : null) ?? order.phone))),
                 ]),
                 const SizedBox(height: 12),
               ]),
             ),
           ),
           const SizedBox(height: 14),
-          // Swipe control — always visible, whether collapsed or expanded
-          SwipeToConfirm(label: context.tr('swipeArrived'), color: WTheme.rose, onConfirm: widget.onArrive),
+          // Step label + swipe control — always visible, whether collapsed
+          // or expanded. Mirrors OrderDetailScreen's _DriverActionBar: an
+          // "assigned" (pending) order must swipe through collecting ->
+          // pickedUp -> onMyWay before "arrived" ever shows up here, same
+          // as it already correctly does on the order-detail screen.
+          _buildStepAndSwipe(context, order),
         ],
       ),
     );
   }
 
+  Widget _buildStepAndSwipe(BuildContext context, Order order) {
+    final ds = order.driverState;
+    final String stepLabel, swipeLabel;
+    final Color swipeColor, labelColor;
+    final VoidCallback onConfirm;
+
+    switch (ds) {
+      case DriverState.pending:
+        stepLabel = context.tr('step1Heading');
+        swipeLabel = order.multiPharmacy
+            ? context.tr('headingToFirstPharmacy')
+            : context.tr('headingToPharmacy');
+        swipeColor = WTheme.sky;
+        labelColor = const Color(0xFF2A9BBC);
+        onConfirm = () => widget.onTransitionState(order.id, DriverState.collecting);
+      case DriverState.collecting:
+        stepLabel = context.tr('step2Collecting');
+        swipeLabel = order.multiPharmacy
+            ? context.tr('openPickupChecklist')
+            : context.tr('confirmPickedUp');
+        swipeColor = WTheme.aqua;
+        labelColor = WTheme.aqua;
+        onConfirm = order.multiPharmacy
+            ? () => Future.microtask(widget.onMultiPickup)
+            : () => widget.onTransitionState(order.id, DriverState.pickedUp);
+      case DriverState.pickedUp:
+        stepLabel = context.tr('step3ItemsInHand');
+        swipeLabel = context.tr('headingToPatient');
+        swipeColor = WTheme.rose;
+        labelColor = WTheme.rose;
+        onConfirm = () => widget.onTransitionState(order.id, DriverState.onMyWay);
+      default: // onMyWay — the only state where "arrived" is correct
+        stepLabel = context.tr('step4OnTheWay');
+        swipeLabel = context.tr('swipeArrived');
+        swipeColor = WTheme.rose;
+        labelColor = WTheme.rose;
+        onConfirm = widget.onArrive;
+    }
+
+    return Column(children: [
+      Text(stepLabel.toUpperCase(), textAlign: TextAlign.center,
+          style: GoogleFonts.dmSans(fontSize: 11, fontWeight: FontWeight.w800,
+              color: labelColor, letterSpacing: 0.6)),
+      const SizedBox(height: 8),
+      SwipeToConfirm(label: swipeLabel, color: swipeColor, onConfirm: onConfirm),
+    ]);
+  }
+
   void _openWaze(Order o) async {
-    final q = Uri.encodeComponent('${o.addr1}, Kuwait');
+    // CLIENT-REQUESTED (2026-08-13): route to the pharmacy while heading
+    // there/collecting — falls back to the customer address if the
+    // pharmacy has none rather than doing nothing.
+    final target = (o.isHeadingToPharmacy ? o.nextUnpickedPharmacy?.address : null) ?? o.addr1;
+    final q = Uri.encodeComponent('$target, Kuwait');
     final url = 'https://waze.com/ul?q=$q';
     if (await canLaunchUrl(Uri.parse(url))) launchUrl(Uri.parse(url));
   }

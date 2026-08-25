@@ -382,90 +382,239 @@ class MultiPickupScreen extends StatelessWidget {
     required this.onBack,
     required this.onOpenPharmacy,
     required this.onReadyToDeliver,
+    required this.onOpenMapForPharmacy,
   });
   final Order order;
   final VoidCallback onBack;
   final ValueChanged<String> onOpenPharmacy;
   final VoidCallback onReadyToDeliver;
+  final ValueChanged<Pharmacy> onOpenMapForPharmacy;
 
   @override
   Widget build(BuildContext context) {
-    final allPicked = order.pickups.every((p) => p.picked);
+    // CLIENT-REPORTED (2026-08-19): rebuilt to match the original design
+    // exactly (gradient progress card, segmented progress bar, SUGGESTED
+    // badge on the next un-picked pharmacy, tappable address block,
+    // pill-shaped OPEN PICKUP buttons) — the previous rebuild fixed the
+    // broken data source but used much plainer, simplified styling.
+    final pharmacies = order.pharmacies;
+    final doneCount = pharmacies.where((p) => p.pickedUp).length;
+    final allPicked = pharmacies.isNotEmpty && doneCount == pharmacies.length;
     return Scaffold(
+      backgroundColor: WTheme.blush,
       body: Column(children: [
-        Container(
-          padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 10, left: 16, right: 16, bottom: 14),
-          decoration: BoxDecoration(gradient: LinearGradient(colors: [WTheme.navy, Color(0xFF04527F)])),
-          child: Row(children: [
-            GestureDetector(
-              onTap: onBack,
-              child: Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 16),
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(children: [
+              GestureDetector(
+                onTap: onBack,
+                child: Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
+                      boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 10, offset: const Offset(0, 4))]),
+                  child: Center(child: Text('‹', style: TextStyle(color: WTheme.navy, fontSize: 22, fontWeight: FontWeight.w700))),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(context.tr('multiPharmacyPickupTitle'), style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
-              Text(order.patient, style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 12)),
-            ])),
-          ]),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(context.tr('multiPharmacyPickupTitle'), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16)),
+                Text('#${order.id} · ${order.patient}', style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 11)),
+              ]),
+            ]),
+          ),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
             children: [
-              WCard(child: Text(context.tr('collectAllPharmaciesIntro').replaceFirst('{n}', '${order.pickups.length}'),
-                  style: GoogleFonts.dmSans(fontSize: 13, color: WTheme.muted))),
-              ...order.pickups.asMap().entries.map((e) {
-                final idx = e.key;
-                final p = e.value;
-                return GestureDetector(
-                  onTap: () => onOpenPharmacy(p.phId),
-                  child: Container(
+              // Progress card — gradient navy -> sky, segmented bar, count.
+              Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [WTheme.navy, WTheme.sky]),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.30), blurRadius: 30, offset: const Offset(0, 12))],
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('📦', style: TextStyle(fontSize: 26)),
+                    const SizedBox(width: 10),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Pick up from ${pharmacies.length} pharmacies',
+                          style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+                      const SizedBox(height: 2),
+                      Text("You can't deliver until every pickup is complete",
+                          style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11)),
+                    ])),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    for (int i = 0; i < pharmacies.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 6),
+                      Expanded(child: Container(
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: pharmacies[i].pickedUp ? WTheme.ok : Colors.white.withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      )),
+                    ],
+                  ]),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text('$doneCount / ${pharmacies.length} picked up',
+                        style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+              // Driver chooses freely which pharmacy to go to first — no lock.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Text('📍 CHOOSE ANY PHARMACY TO START WITH — PICK THE CLOSEST OR EASIEST',
+                    style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.6)),
+              ),
+              const SizedBox(height: 8),
+              for (int i = 0; i < pharmacies.length; i++) ...[
+                Builder(builder: (context) {
+                  final p = pharmacies[i];
+                  final done = p.pickedUp;
+                  // No lock — every non-done pharmacy is fully clickable.
+                  // The "suggested" badge nudges toward the first
+                  // un-picked entry but doesn't restrict the driver.
+                  final suggested = !done && pharmacies.take(i).every((prev) => prev.pickedUp);
+                  final key = '${p.sellerId ?? p.name}';
+                  return Container(
                     margin: const EdgeInsets.only(bottom: 10),
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: p.picked ? WTheme.ok.withOpacity(0.06) : Colors.white,
+                      gradient: suggested
+                          ? LinearGradient(colors: [WTheme.rose.withOpacity(0.05), Colors.white])
+                          : null,
+                      color: done ? WTheme.ok.withOpacity(0.06) : (suggested ? null : Colors.white),
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: p.picked ? WTheme.ok : WTheme.cloud, width: p.picked ? 1.5 : 1),
-                    ),
-                    child: Row(children: [
-                      Container(
-                        width: 36, height: 36,
-                        decoration: BoxDecoration(color: p.picked ? WTheme.ok : WTheme.aqua, shape: BoxShape.circle),
-                        child: Center(child: Text(p.picked ? '✓' : '${idx + 1}',
-                            style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800))),
+                      border: Border.all(
+                        color: done ? WTheme.ok.withOpacity(0.3) : (suggested ? WTheme.rose : WTheme.cloud),
+                        width: 1.5,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(p.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 14, color: WTheme.navy)),
-                        Text(p.addr, style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted)),
-                        Text(context.tr('itemsCountTemplate').replaceFirst('{n}', '${p.items.length}'), style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.sky, fontWeight: FontWeight.w600)),
-                      ])),
-                      Icon(p.picked ? Icons.check_circle : Icons.chevron_right, color: p.picked ? WTheme.ok : WTheme.muted),
+                      boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Container(
+                          width: 44, height: 44,
+                          decoration: BoxDecoration(
+                            color: done ? WTheme.ok : (suggested ? WTheme.rose : WTheme.sky),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Center(child: Text(done ? '✓' : '${i + 1}',
+                              style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17))),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                            Text('PHARMACY ${i + 1}', style: GoogleFonts.dmSans(
+                                fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                            if (done)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(color: WTheme.ok.withOpacity(0.15), borderRadius: BorderRadius.circular(999)),
+                                child: Text('PICKED UP', style: GoogleFonts.dmSans(fontSize: 9, color: WTheme.ok, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+                              ),
+                            if (suggested)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(color: WTheme.rose, borderRadius: BorderRadius.circular(999)),
+                                child: Text('SUGGESTED', style: GoogleFonts.dmSans(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+                              ),
+                          ]),
+                          const SizedBox(height: 4),
+                          Text(p.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.navy, fontSize: 16, letterSpacing: -0.2)),
+                        ])),
+                      ]),
+                      const SizedBox(height: 10),
+                      // Address — tappable, opens the map focused on this
+                      // specific pharmacy (see onOpenMapForPharmacy).
+                      GestureDetector(
+                        onTap: () => onOpenMapForPharmacy(p),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: WTheme.blush,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border(left: BorderSide(color: WTheme.aqua, width: 3)),
+                          ),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            const Text('📍', style: TextStyle(fontSize: 18)),
+                            const SizedBox(width: 8),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('ADDRESS', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                              const SizedBox(height: 3),
+                              Text((p.address?.isNotEmpty ?? false) ? p.address! : 'No address available',
+                                  style: GoogleFonts.dmSans(fontSize: 14, fontWeight: FontWeight.w800, color: WTheme.navy, letterSpacing: -0.2, height: 1.3)),
+                            ])),
+                            Text('TAP', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                          ]),
+                        ),
+                      ),
+                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                        Text('📦 ${p.itemsCount} item${p.itemsCount == 1 ? '' : 's'}',
+                            style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w600)),
+                        if (!done)
+                          GestureDetector(
+                            onTap: () => onOpenPharmacy(key),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: suggested ? WTheme.rose : WTheme.sky,
+                                borderRadius: BorderRadius.circular(999),
+                                boxShadow: [BoxShadow(color: (suggested ? WTheme.rose : WTheme.sky).withOpacity(0.4), blurRadius: 14, offset: const Offset(0, 6))],
+                              ),
+                              child: Text('OPEN PICKUP →', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                            ),
+                          )
+                        else
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(color: WTheme.ok.withOpacity(0.15), borderRadius: BorderRadius.circular(999)),
+                            child: Text('✓ PICKED UP', style: GoogleFonts.dmSans(color: WTheme.ok, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                          ),
+                      ]),
                     ]),
-                  ),
-                );
-              }),
+                  );
+                }),
+              ],
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                margin: const EdgeInsets.only(top: 10, bottom: 14),
+                decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(12)),
+                child: RichText(text: TextSpan(
+                  style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.navy, height: 1.5),
+                  children: [
+                    const TextSpan(text: '📍 After all pickups\n', style: TextStyle(fontWeight: FontWeight.w800)),
+                    TextSpan(text: "You'll head to ${order.patient} at ${order.addr1} · ${order.addr2}",
+                        style: TextStyle(color: WTheme.muted)),
+                  ],
+                )),
+              ),
             ],
           ),
         ),
         Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(context).padding.bottom + 16),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: allPicked ? WTheme.rose : WTheme.muted,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-              onPressed: allPicked ? onReadyToDeliver : null,
-              child: Text(allPicked ? context.tr('allPickedHeadToPatient') : context.tr('collectFromAllFirst'),
-                  style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 15)),
-            ),
-          ),
+          padding: EdgeInsets.fromLTRB(18, 0, 18, MediaQuery.of(context).padding.bottom + 22),
+          child: allPicked
+              ? SwipeToConfirm(label: context.tr('allPickedHeadToPatient'), color: WTheme.ok, onConfirm: onReadyToDeliver)
+              : Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(14)),
+                  child: Center(child: Text(
+                      '🔒 ${pharmacies.length - doneCount} more pickup${pharmacies.length - doneCount == 1 ? '' : 's'} before delivery',
+                      style: GoogleFonts.dmSans(color: WTheme.muted, fontSize: 13, fontWeight: FontWeight.w700))),
+                ),
         ),
       ]),
     );
@@ -477,71 +626,196 @@ class SinglePharmacyStopScreen extends StatelessWidget {
   const SinglePharmacyStopScreen({
     super.key,
     required this.order,
-    required this.phId,
+    required this.sellerKey,
     required this.onBack,
     required this.onConfirmPickup,
   });
   final Order order;
-  final String phId;
+  // '${sellerId ?? name}' — matches the key MultiPickupScreen builds for
+  // each pharmacy, since seller ids aren't always present.
+  final String sellerKey;
   final VoidCallback onBack;
   final VoidCallback onConfirmPickup;
 
   @override
   Widget build(BuildContext context) {
-    final pharmacy = order.pickups.firstWhereOrNull((p) => p.phId == phId);
+    final pharmacy = order.pharmacies.firstWhereOrNull((p) => '${p.sellerId ?? p.name}' == sellerKey);
     if (pharmacy == null) return const SizedBox.shrink();
 
+    // CLIENT-REPORTED (2026-08-19): rebuilt to match the original design
+    // — a richer hero header with order context and live countdown, real
+    // item cards (price/qty, not just names), a subtotal, and a warning
+    // banner — rather than the earlier, much plainer rebuild.
+    final pickupIndex = order.pharmacies.indexOf(pharmacy) + 1;
+    final totalPickups = order.pharmacies.length;
+    // Cross-reference against order.items (which has real price/qty/tag)
+    // by name, since pharmacy.itemNames only has plain strings — same
+    // approach the design itself uses (looking up a catalog by name).
+    final richItems = pharmacy.itemNames.map((name) {
+      OrderItem? match;
+      for (final it in order.items) { if (it.name == name) { match = it; break; } }
+      return match ?? OrderItem(name: name, price: 0, qty: 1, tag: 'OTC');
+    }).toList();
+    final subtotal = richItems.fold<double>(0, (s, it) => s + it.price * it.qty);
+
     return Scaffold(
+      backgroundColor: WTheme.blush,
       body: Column(children: [
         Container(
-          padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 10, left: 16, right: 16, bottom: 14),
-          decoration: BoxDecoration(gradient: LinearGradient(colors: [WTheme.aqua, WTheme.sky])),
-          child: Row(children: [
-            GestureDetector(
-              onTap: onBack,
-              child: Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 16),
+          padding: EdgeInsets.fromLTRB(22, MediaQuery.of(context).padding.top + 14, 22, 20),
+          decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [WTheme.aqua, WTheme.sky])),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              GestureDetector(
+                onTap: onBack,
+                child: Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(12)),
+                  child: Center(child: Text('‹', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700))),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(pharmacy.name, style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
-              Text(pharmacy.addr, style: GoogleFonts.dmSans(color: Colors.white70, fontSize: 12)),
-            ])),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(color: WTheme.navy, borderRadius: BorderRadius.circular(999)),
+                child: Text('PHARMACY $pickupIndex OF $totalPickups', style: GoogleFonts.dmSans(
+                    color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            Text('PICKUP AT', style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+            const SizedBox(height: 2),
+            Text(pharmacy.name, style: GoogleFonts.dmSans(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24, letterSpacing: -0.3)),
+            const SizedBox(height: 8),
+            RichText(text: TextSpan(
+              style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w600),
+              children: [
+                const TextSpan(text: '🧾 Part of order '),
+                TextSpan(text: '#${order.id}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                TextSpan(text: ' · for ${order.patient}'),
+              ],
+            )),
+            const SizedBox(height: 12),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(999)),
+                child: Text('🏥 PICKING UP', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+              ),
+              if (pharmacy.address != null && pharmacy.address!.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(999)),
+                  child: Text('📍 ${pharmacy.address}', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+                ),
+            ]),
+            if (order.status != OrderStatus.done && order.status != OrderStatus.failed) ...[
+              const SizedBox(height: 8),
+              SlaCountdown(order: order, size: 'l'),
+            ],
           ]),
         ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              WCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(context.tr('itemsToCollect'), style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: WTheme.muted, letterSpacing: 0.5)),
-                const SizedBox(height: 10),
-                ...pharmacy.items.map((name) => Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: (pharmacy.itemsPicked[name] == true) ? WTheme.ok.withOpacity(0.08) : WTheme.blush,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: (pharmacy.itemsPicked[name] == true) ? WTheme.ok : WTheme.cloud),
-                  ),
-                  child: Row(children: [
-                    Icon(pharmacy.itemsPicked[name] == true ? Icons.check_box : Icons.check_box_outline_blank,
-                        color: pharmacy.itemsPicked[name] == true ? WTheme.ok : WTheme.muted),
-                    const SizedBox(width: 10),
-                    Text(name, style: GoogleFonts.dmSans(fontSize: 13, fontWeight: FontWeight.w600, color: WTheme.ink)),
+              Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(14),
+                  boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 30, offset: const Offset(0, 12))],
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Text('Items to pick up (${richItems.length})', style: GoogleFonts.dmSans(
+                        fontSize: 11, fontWeight: FontWeight.w700, color: WTheme.muted, letterSpacing: 0.5)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                      decoration: BoxDecoration(color: const Color(0xFF2A9BBC).withOpacity(0.18), borderRadius: BorderRadius.circular(999)),
+                      child: Text('🏥 ${pharmacy.name}', style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800, color: const Color(0xFF2A9BBC))),
+                    ),
                   ]),
-                )),
-              ])),
+                  const SizedBox(height: 12),
+                  ...richItems.map((item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // CLIENT-REPORTED (2026-08-22): a real, valid image
+                      // URL was confirmed in the raw response, but the
+                      // thumbnail showed completely blank — no image, no
+                      // fallback emoji either. Root cause: BoxDecoration's
+                      // DecorationImage has no loading or error state at
+                      // all — while an image is still fetching, or if it
+                      // ever fails to load, it just silently shows
+                      // nothing, revealing the plain background color.
+                      // Image.network (used directly here instead)
+                      // supports both loadingBuilder and errorBuilder,
+                      // so a fallback is always visible instead of a
+                      // blank box during that window.
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          width: 52, height: 52,
+                          color: WTheme.blush,
+                          child: item.imageUrl != null
+                              ? Image.network(
+                                  item.imageUrl!,
+                                  width: 52, height: 52,
+                                  fit: BoxFit.cover,
+                                  loadingBuilder: (context, child, progress) =>
+                                      progress == null ? child : const Center(child: SizedBox(
+                                          width: 18, height: 18,
+                                          child: CircularProgressIndicator(strokeWidth: 2))),
+                                  errorBuilder: (context, error, stackTrace) =>
+                                      const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
+                                )
+                              : const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(item.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 13, height: 1.3)),
+                        const SizedBox(height: 6),
+                        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                          RichText(text: TextSpan(children: [
+                            TextSpan(text: item.price.toStringAsFixed(3), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.rose, fontSize: 14)),
+                            TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
+                          ])),
+                          Text('×${item.qty}', style: GoogleFonts.dmSans(color: WTheme.navy, fontSize: 13, fontWeight: FontWeight.w800)),
+                        ]),
+                      ])),
+                    ]),
+                  )),
+                  Container(
+                    padding: const EdgeInsets.only(top: 12),
+                    decoration: BoxDecoration(border: Border(top: BorderSide(color: WTheme.cloud, width: 1))),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic, children: [
+                      Text('PHARMACY SUB-TOTAL', style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                      RichText(text: TextSpan(children: [
+                        TextSpan(text: subtotal.toStringAsFixed(3), style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 16)),
+                        TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 11, color: WTheme.muted, fontWeight: FontWeight.w600)),
+                      ])),
+                    ]),
+                  ),
+                ]),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: WTheme.warn.withOpacity(0.10),
+                  border: Border(left: BorderSide(color: WTheme.warn, width: 3)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text('⚠️ Verify every item from this pharmacy before confirming pickup. You\'ll move to the next pharmacy after.',
+                    style: GoogleFonts.dmSans(fontSize: 12, color: const Color(0xFFB4730E), height: 1.5)),
+              ),
             ],
           ),
         ),
         Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(context).padding.bottom + 16),
+          padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(context).padding.bottom + 22),
           child: SwipeToConfirm(
-            label: context.tr('confirmPickupTemplate').replaceFirst('{name}', pharmacy.name),
+            label: 'Confirm pickup at ${pharmacy.name}',
             color: WTheme.ok,
             onConfirm: onConfirmPickup,
           ),

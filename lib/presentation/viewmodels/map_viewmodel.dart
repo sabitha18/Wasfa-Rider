@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:wasfa_rider/data/repositories/order_repository.dart';
 
 class MapViewModel extends ChangeNotifier {
   // ══════════════════════════════════════════════════════════════
@@ -16,7 +17,7 @@ class MapViewModel extends ChangeNotifier {
   //
   // A "TEST LOCATION" badge appears on the Home map screen whenever
   // this is true, as a safeguard so it's obvious before you ship.
-  static const bool kDebugFakeDriverLocation = true; // <-- SET false BEFORE RELEASE BUILD
+  static const bool kDebugFakeDriverLocation = false; // <-- SET false BEFORE RELEASE BUILD
   static const LatLng kDebugFakeLocationCoord = LatLng(29.3759, 47.9774); // change freely while testing
   // ══════════════════════════════════════════════════════════════
 
@@ -35,6 +36,19 @@ class MapViewModel extends ChangeNotifier {
 
   // ── Public API ────────────────────────────────────────────────
   Future<void> startTracking() async {
+    // CLIENT-REPORTED (2026-08-13): video showed rapid repeated Home ↔
+    // Orders ↔ Profile tab-switching leading to the app appearing stuck.
+    // Root cause candidate: tabs aren't a persistent IndexedStack — main.dart
+    // fully disposes and rebuilds each screen on every switch — so every
+    // single Home mount called startTracking() again via
+    // didChangeDependencies, even though the underlying GPS subscription
+    // was already running fine from moments ago. That meant a fresh
+    // _ensurePermission() native-channel round-trip (isLocationServiceEnabled
+    // + checkPermission, at minimum) on every mount, which can queue up and
+    // visibly stall the UI when triggered many times in quick succession on
+    // a slower device. Skip all of that entirely when already tracking —
+    // there's nothing to redo.
+    if (_tracking && _positionStream != null) return;
     if (kDebugFakeDriverLocation) {
       // Test-only path — no permission check, no real GPS stream.
       await _positionStream?.cancel();
@@ -74,7 +88,35 @@ class MapViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Live-location sharing (customer app "Track Order") ─────────
+  // REMOVED (2026-08-25): this called a GUESSED endpoint
+  // (POST /orders/{co}/location) that was never confirmed with backend
+  // — client confirmed live via Postman that it returns a genuine 404,
+  // "The route api/driver/orders/{co}/location could not be found."
+  // This had been actively firing every 12 seconds for every "on my
+  // way" delivery, hitting a route that has never existed. If this
+  // feature (customer app seeing the driver's live position) is still
+  // wanted, ask backend for the real endpoint first, then wire it in —
+  // per the explicit instruction not to ship guessed/dummy API calls.
+
   // ── Internal helpers ──────────────────────────────────────────
+  // CLIENT-ASKED (2026-08-22): confirmed correct that re-requesting is
+  // the right approach for a plain "denied" — but Android/iOS both have
+  // a SECOND denial state ("denied forever" / permanently blocked at the
+  // OS level) where calling requestPermission() again will NEVER show
+  // the native popup again, by OS design — no amount of retrying from
+  // the app can bring it back. The only fix at that point is directing
+  // the driver to the phone's own Settings app. This picks the correct
+  // action for whichever state actually occurred, rather than always
+  // just retrying.
+  Future<void> retryLocationPermission() async {
+    if (_error == 'Location permissions permanently denied.') {
+      await Geolocator.openAppSettings();
+    } else {
+      await startTracking(); // re-runs _ensurePermission(), showing the native popup again if that's actually still possible
+    }
+  }
+
   Future<bool> _ensurePermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {

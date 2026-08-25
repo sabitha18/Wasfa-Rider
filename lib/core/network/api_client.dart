@@ -35,6 +35,36 @@ class ApiClient {
       onError: (error, handler) async {
         // TODO: if backend uses refresh tokens, attempt refresh here on 401
         // before giving up and forcing logout.
+        // CLIENT-REPORTED (2026-08-18): "Could not reach the server" was
+        // showing up right after unlocking the phone, even with a
+        // genuinely fine internet connection throughout the whole time.
+        // Root cause: Dart's HttpClient (which Dio uses under the hood)
+        // reuses a persistent keep-alive TCP connection by default. While
+        // the screen is off and the app goes idle, the OS or a NAT/
+        // carrier timeout can silently kill that connection in the
+        // background — the client has no way to know until it actually
+        // tries to reuse it, which happens to be exactly the first
+        // request fired right on unlock. That one attempt fails with a
+        // low-level connection error even though the network itself is
+        // completely fine; a fresh connection on the very next attempt
+        // works. Retry once, transparently, specifically for this class
+        // of error — this fixes the actual mechanism, rather than just
+        // hiding the symptom from the user after the fact.
+        final isConnectionError = error.type == DioExceptionType.connectionError;
+        final alreadyRetried = error.requestOptions.extra['retriedAfterConnectionError'] == true;
+        if (isConnectionError && !alreadyRetried) {
+          try {
+            final retryOptions = error.requestOptions;
+            retryOptions.extra['retriedAfterConnectionError'] = true;
+            final response = await _dio.fetch(retryOptions);
+            handler.resolve(response);
+            return;
+          } catch (_) {
+            // The retry itself failed too — this is no longer just a
+            // stale-connection blip, so fall through and let the
+            // original error propagate normally.
+          }
+        }
         handler.next(error);
       },
     ));

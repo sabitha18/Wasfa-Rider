@@ -2,12 +2,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wasfa_rider/core/theme/app_theme.dart';
 import 'package:wasfa_rider/data/models/models.dart';
 import 'package:wasfa_rider/data/repositories/order_repository.dart';
 import 'package:wasfa_rider/presentation/viewmodels/orders_viewmodel.dart';
+import 'package:wasfa_rider/presentation/viewmodels/map_viewmodel.dart';
 import 'package:wasfa_rider/presentation/widgets/shared_widgets.dart';
 import 'package:wasfa_rider/core/constants/app_strings.dart';
 
@@ -21,17 +23,49 @@ class OrderDetailScreen extends StatefulWidget {
     required this.onTransitionState,
     required this.onMultiPickup,
     required this.onOpenMap,
+    required this.onOpenMapForPharmacy,
   });
   final String orderId;
   final VoidCallback onBack, onArrive, onCantDeliver, onMultiPickup;
   final void Function(String id, DriverState state) onTransitionState;
   final ValueChanged<Order> onOpenMap;
+  // CLIENT-REPORTED (2026-08-19): every pharmacy's own "MAP" button
+  // used the same generic onOpenMap, which always focused
+  // order.primaryPharmacy (the FIRST pharmacy) regardless of which
+  // pharmacy's own card was actually tapped — e.g. tapping "3lcost"'s
+  // map button showed a completely different pharmacy's location.
+  final void Function(Order order, Pharmacy pharmacy) onOpenMapForPharmacy;
 
   @override
   State<OrderDetailScreen> createState() => _OrderDetailScreenState();
 }
 
 class _OrderDetailScreenState extends State<OrderDetailScreen> {
+  // CLIENT-REPORTED (2026-08-25): same fix as Home's card — an order
+  // can have a complete text address while its own lat/lng are null.
+  // See home_screen.dart's _ActiveOrderCardState for the full
+  // explanation; this reuses the identical approach, including trying
+  // map_link (a human-verified location) before falling back to
+  // geocoding the free-text address.
+  final _orderRepo = OrderRepository();
+  final Map<String, LatLng?> _geocodedCustomerPins = {};
+  final Set<String> _geocodeAttempted = {};
+
+  LatLng? _resolveCustomerPin(Order order) {
+    if (_geocodedCustomerPins.containsKey(order.id)) return _geocodedCustomerPins[order.id];
+    if (_geocodeAttempted.contains(order.id)) return null;
+    _geocodeAttempted.add(order.id);
+    Future<({double lat, double lng})?> resolve() {
+      if (order.mapLink != null) return _orderRepo.resolveMapLinkCoords(order.mapLink!);
+      return _orderRepo.geocodeOrder(order.co ?? order.id);
+    }
+    resolve().then((result) {
+      if (!mounted) return;
+      setState(() => _geocodedCustomerPins[order.id] = result != null ? LatLng(result.lat, result.lng) : null);
+    });
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -143,7 +177,89 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                     text: order.paid ? '✓ PAID' : '${order.payMethod.name.toUpperCase()} · NOT PAID',
                     color: order.paid ? WTheme.ok.withOpacity(0.30) : WTheme.warn.withOpacity(0.30),
                   ),
-                  _HeroPill(text: '📍 ${order.distanceKm} km · ⏱ ${order.etaMin} min'),
+                  // CLIENT-REPORTED (2026-08-22): this pill showed a
+                  // permanent "0.0 km · 0 min" — order.distanceKm/etaMin
+                  // come straight from backend's own fields, which have
+                  // been null on every order seen live throughout this
+                  // whole project, always defaulting to 0. Same fix
+                  // already applied to Home's card: a real, live
+                  // straight-line distance from the driver's current GPS
+                  // position to whichever destination is relevant right
+                  // now (pharmacy while heading there, customer once
+                  // heading to the patient) — genuine and updating,
+                  // rather than a permanent fake zero. Not the same as a
+                  // real road-distance/route (that needs the Directions
+                  // API — see in_app_map_screen.dart's own note on this
+                  // same limitation).
+                  Builder(builder: (context) {
+                    final showingPharmacy = order.isHeadingToPharmacy && order.nextUnpickedPharmacy != null;
+                    final pharmacy = order.nextUnpickedPharmacy;
+                    final mapVM = context.watch<MapViewModel>();
+                    final driverPos = mapVM.driverPosition;
+                    LatLng? destPos;
+                    if (showingPharmacy && pharmacy!.hasCoords) {
+                      destPos = LatLng(pharmacy.lat!, pharmacy.lng!);
+                    } else if (!showingPharmacy) {
+                      final hasRealPin = !(order.pinPos.leftFraction == 0.5 && order.pinPos.topFraction == 0.5);
+                      // CLIENT-REPORTED (2026-08-25): confirmed live —
+                      // an order can have a complete text address
+                      // (addr1/addr2/addr_full all populated) while its
+                      // own lat/lng are null. This used to just give up
+                      // in that case; now falls back to geocoding the
+                      // text address, same as the map screens already do.
+                      destPos = hasRealPin
+                          ? LatLng(order.pinPos.topFraction, order.pinPos.leftFraction)
+                          : _resolveCustomerPin(order);
+                    }
+                    final live = liveDistanceAndEta(driverPos, destPos);
+                    final liveDistanceKm = live.km;
+                    final liveEtaMin = live.etaMin;
+                    // CLIENT-REPORTED (2026-08-22) follow-up: my
+                    // previous fix only explained the "driver's own GPS
+                    // missing" case — a bare, unexplained "—" (no km/min
+                    // attempted at all) means driverPos is actually
+                    // NON-null, and destPos (the pharmacy/customer's own
+                    // coordinates) is the missing piece instead, which
+                    // this never distinguished. Now covers every case.
+                    // Only the driver-GPS case is actually actionable
+                    // (retry/Settings) — a missing destination
+                    // coordinate is a data problem backend needs to fix,
+                    // and a rejected reading (both positions exist but
+                    // the result was unrealistic) needs a fresh GPS fix,
+                    // not a permission dialog.
+                    final gpsIsActionable = driverPos == null;
+                    // CLIENT-REPORTED (2026-08-25): confirmed via a real
+                    // order — addr1/addr2/addr_full were all populated
+                    // correctly, but this said "No address on file",
+                    // which reads as if the address itself were missing.
+                    // What's actually missing is just lat/lng (both null
+                    // on that order) — the text address can be present
+                    // and correct even when no numeric coordinate exists
+                    // to calculate a distance from. Reworded to be
+                    // specific about what's actually missing.
+                    final distanceText = liveDistanceKm != null
+                        ? (liveDistanceKm < 1 ? '${(liveDistanceKm * 1000).round()} m' : '${liveDistanceKm.toStringAsFixed(1)} km')
+                        : driverPos == null
+                            ? (mapVM.error != null ? 'GPS unavailable' : 'Waiting for GPS…')
+                            : destPos == null
+                                ? (showingPharmacy ? 'Pharmacy has no coordinates' : 'Locating address…')
+                                : 'GPS reading unclear';
+                    final etaText = liveEtaMin != null ? ' · ⏱ ~$liveEtaMin min' : '';
+                    // CLIENT-ASKED (2026-08-22) follow-up: made this
+                    // tappable when there's an actual permission problem
+                    // — retries the native popup when that's still
+                    // possible, or opens the phone's Settings app
+                    // directly when permanently denied (an OS-level
+                    // restriction no amount of re-asking can undo).
+                    final hasActionableProblem = gpsIsActionable && mapVM.error != null;
+                    return GestureDetector(
+                      onTap: hasActionableProblem ? () => mapVM.retryLocationPermission() : null,
+                      child: _HeroPill(
+                        text: '📍 $distanceText$etaText',
+                        color: hasActionableProblem ? WTheme.err.withOpacity(0.35) : null,
+                      ),
+                    );
+                  }),
                   _HeroPill(text: '📦 ${order.items.length} item${order.items.length != 1 ? "s" : ""}'),
                 ]),
               ]),
@@ -158,6 +274,22 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             if (order.customerNote != null) _NoteCard(note: order.customerNote!),
             // Items card
             _ItemsCard(order: order),
+            // Pharmacy pickup card(s) — CLIENT-REQUESTED (2026-08-13):
+            // shown only while heading to pharmacy/collecting (see
+            // Order.isHeadingToPharmacy), since that's the only window
+            // where the driver actually needs pharmacy directions/contact
+            // rather than the customer's. Kept as its own card instead of
+            // folding into _CustomerCard below, which stays honestly
+            // labeled "Customer Details" — mixing the two would be
+            // confusing about which contact/address each button targets.
+            // CLIENT-REPORTED (2026-08-18): this used to only ever show
+            // order.primaryPharmacy (the first one) — an order with items
+            // from 2 different pharmacies only ever showed one of them,
+            // so the driver had no indication a second pharmacy stop
+            // existed at all. Now shows one card per pharmacy.
+            if (order.isHeadingToPharmacy)
+              for (final pharmacy in order.pharmacies)
+                _PharmacyCard(pharmacy: pharmacy, onOpenMap: () => widget.onOpenMapForPharmacy(order, pharmacy)),
             // Customer details card
             _CustomerCard(order: order, onOpenMap: onOpenMap),
             // Building photos block (before total — matches HTML)
@@ -208,13 +340,23 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   Widget _whatsappBtn(Order order, BuildContext context) => GestureDetector(
     onTap: () async {
-      // TEMPORARILY DISABLED — this used to build a WhatsApp message
-      // containing a fabricated payment URL (pay.wasfakw.com/o/{id}) that
-      // was never confirmed with backend and almost certainly isn't a
-      // real, working page. Sending a broken payment link to an actual
-      // customer is worse than not sending one at all. Restore the real
-      // link/flow here once backend confirms the actual format or endpoint.
-      showWToast(context, "Payment link isn't ready yet — check back soon");
+      // CLIENT-REPORTED (2026-08-13): confirmed live — the order response
+      // already includes a real, working payment_link (Tap Payments
+      // url-shortener), no separate "generate link" endpoint needed at
+      // all. Previously this always showed a "not ready" toast
+      // regardless, even for orders that already had a real link sitting
+      // right there unused. Only orders that genuinely don't have one
+      // yet (paymentLink null) still show that toast.
+      final link = order.paymentLink;
+      if (link == null) {
+        showWToast(context, "Payment link isn't ready yet — check back soon");
+        return;
+      }
+      final message = 'Hi ${order.patient}, please complete your payment for order #${order.id} '
+          '(${order.total.toStringAsFixed(3)} KD) here: $link';
+      final phone = order.phone.replaceAll(RegExp(r'\D'), '');
+      final uri = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(message)}');
+      if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
     },
     child: Container(
       width: double.infinity,
@@ -324,7 +466,21 @@ class _ItemsCard extends StatelessWidget {
   final Order order;
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    // CLIENT-REPORTED (2026-08-18): the top-level order.items array may
+    // not carry a "pharmacy" field per item on every endpoint shape —
+    // confirmed the order-detail endpoint's pharmacies come back with
+    // their OWN nested item names (see Pharmacy.itemNames). Build a
+    // name -> pharmacy lookup from that as a fallback for whenever an
+    // item's own `pharmacy` field is missing, rather than assuming it's
+    // always present.
+    final nameToPharmacy = <String, String>{};
+    for (final p in order.pharmacies) {
+      for (final itemName in p.itemNames) {
+        nameToPharmacy[itemName] = p.name;
+      }
+    }
+    return Container(
     width: double.infinity,
     margin: const EdgeInsets.only(bottom: 14),
     padding: const EdgeInsets.all(16),
@@ -341,22 +497,35 @@ class _ItemsCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
             decoration: BoxDecoration(color: WTheme.aqua.withOpacity(0.18),
                 borderRadius: BorderRadius.circular(999)),
-            child: Text('🏥 ${order.pickups.length} pharmacies',
+            // CLIENT-REPORTED (2026-08-18): this used order.pickups.length
+            // — the field confirmed elsewhere to always be empty, so this
+            // badge always read "0 pharmacies" regardless of the real
+            // count. order.pharmacies is the confirmed, real field.
+            child: Text('🏥 ${order.pharmacies.length} pharmacies',
                 style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w800,
                     color: const Color(0xFF2A9BBC))),
           ),
       ]),
       const SizedBox(height: 12),
-      ...order.items.map((item) => _RichItemCard(item: item, showPharmacy: order.multiPharmacy)),
+      ...order.items.map((item) => _RichItemCard(
+        item: item,
+        showPharmacy: order.multiPharmacy,
+        fallbackPharmacyName: nameToPharmacy[item.name],
+      )),
     ]),
-  );
+    );
+  }
 }
 
 // ── Rich item card (matches HTML's RichItemCard) ───────────────
 class _RichItemCard extends StatefulWidget {
-  const _RichItemCard({required this.item, this.showPharmacy = false});
+  const _RichItemCard({required this.item, this.showPharmacy = false, this.fallbackPharmacyName});
   final OrderItem item;
   final bool showPharmacy;
+  // Used when item.pharmacy itself is null — see _ItemsCard.build for
+  // where this gets resolved from the order-detail endpoint's nested
+  // per-pharmacy item lists.
+  final String? fallbackPharmacyName;
 
   @override
   State<_RichItemCard> createState() => _RichItemCardState();
@@ -582,13 +751,82 @@ class _RichItemCardState extends State<_RichItemCard> {
                   ]),
             ),
           ]),
-          if (widget.showPharmacy && item.pharmacy != null) ...[
+          if (widget.showPharmacy && (item.pharmacy ?? widget.fallbackPharmacyName) != null) ...[
             const SizedBox(height: 4),
-            Text('🏥 Seller: ${item.pharmacy}', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
+            Text('🏥 Seller: ${item.pharmacy ?? widget.fallbackPharmacyName}', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
           ],
         ])),
       ]),
     );
+  }
+}
+
+// ── Pharmacy pickup card ─────────────────────────────────────────
+// CLIENT-REQUESTED (2026-08-13): only shown while heading to
+// pharmacy/collecting — see Order.isHeadingToPharmacy. onOpenMap here
+// already opens the shared InAppMapScreen for this order, which itself
+// resolves to the pharmacy's coordinates during this same window (see
+// in_app_map_screen.dart's _resolveDestination) — no separate map
+// screen needed just for this card.
+class _PharmacyCard extends StatelessWidget {
+  const _PharmacyCard({required this.pharmacy, required this.onOpenMap});
+  final Pharmacy pharmacy;
+  final VoidCallback onOpenMap;
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFF2ECC71);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 30, offset: const Offset(0, 12))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('💊 PHARMACY PICKUP', style: GoogleFonts.dmSans(
+            fontSize: 11, fontWeight: FontWeight.w700, color: accent, letterSpacing: 0.5)),
+        const SizedBox(height: 12),
+        Text(pharmacy.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 15)),
+        if (pharmacy.itemsCount > 0) ...[
+          const SizedBox(height: 2),
+          Text('${pharmacy.itemsCount} item${pharmacy.itemsCount == 1 ? '' : 's'} from here', style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted)),
+        ],
+        if (pharmacy.address != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: const BoxDecoration(color: WTheme.cloud),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('📍', style: TextStyle(color: accent, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(child: Text(pharmacy.address!, style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 13, height: 1.4))),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 12),
+        GridView.count(
+          crossAxisCount: pharmacy.phone != null ? 3 : 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 3.2,
+          children: [
+            if (pharmacy.phone != null)
+              _ContactBtn(label: '📞 ${context.tr('call')}', bg: WTheme.ok, fg: Colors.white,
+                  onTap: () => _launch('tel:${pharmacy.phone!.replaceAll(RegExp(r'\s'), '')}')),
+            _ContactBtn(label: '🗺 ${context.tr('map')}', outline: const Color(0xFF4285F4), fg: const Color(0xFF4285F4),
+                onTap: onOpenMap),
+            if (pharmacy.address != null)
+              _ContactBtn(label: '🚗 ${context.tr('waze')}', outline: const Color(0xFF33CCFF), fg: const Color(0xFF33CCFF),
+                  onTap: () => _launch('https://waze.com/ul?q=${Uri.encodeComponent('${pharmacy.address}, Kuwait')}')),
+          ],
+        ),
+      ]),
+    );
+  }
+
+  void _launch(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) launchUrl(uri);
   }
 }
 
@@ -898,6 +1136,80 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
   bool _uploading = false;
   File? _pickedFile;
 
+  // CLIENT-REQUESTED (2026-08-22): tapping a building photo thumbnail
+  // did nothing at all — no way to see it larger. Matches the same
+  // visual language as _RichItemCardState's item-image lightbox (dark
+  // overlay, × close top-right, tap-to-dismiss) but simpler, since these
+  // are plain photos rather than product items needing special styling
+  // — and adds pinch-to-zoom via InteractiveViewer, genuinely useful
+  // here since these are often photos of address labels/building
+  // details where the driver may need to zoom in to read small text.
+  void _showPhotoLightbox(BuildingPhoto photo) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.85),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.of(ctx).pop(),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Stack(children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 5.0,
+                child: Center(
+                  child: Image.network(
+                    photo.url,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (_, child, progress) => progress == null ? child : const Center(
+                        child: CircularProgressIndicator(color: Colors.white)),
+                    errorBuilder: (_, __, ___) => const Center(
+                        child: Text('📷', style: TextStyle(fontSize: 80))),
+                  ),
+                ),
+              ),
+            ),
+            if (photo.by != null || (photo.note != null && photo.note!.trim().isNotEmpty))
+              Positioned(
+                left: 20, right: 20, bottom: MediaQuery.of(ctx).padding.bottom + 20,
+                child: GestureDetector(
+                  onTap: () {}, // prevent tap-through onto the dismiss barrier
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(12)),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      if (photo.by != null)
+                        Text('${context.tr('byPrefix')} ${photo.by}', style: GoogleFonts.dmSans(
+                            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                      if (photo.note != null && photo.note!.trim().isNotEmpty)
+                        Text(photo.note!, style: GoogleFonts.dmSans(color: Colors.white70, fontSize: 12)),
+                    ]),
+                  ),
+                ),
+              ),
+            Positioned(
+              top: MediaQuery.of(ctx).padding.top + 20,
+              right: 20,
+              child: GestureDetector(
+                onTap: () => Navigator.of(ctx).pop(),
+                child: Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.20),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
+                  ),
+                  child: const Center(child: Text('×', style: TextStyle(
+                      color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800))),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -998,15 +1310,18 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
               decoration: BoxDecoration(color: WTheme.blush, borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: WTheme.cloud, width: 1.5)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(photo.url, height: 90, width: 90, fit: BoxFit.cover,
-                      loadingBuilder: (_, child, progress) => progress == null ? child : Container(
-                          height: 90, width: 90, color: WTheme.cloud,
-                          child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))),
-                      errorBuilder: (_, __, ___) => Container(
-                          height: 90, width: 90, color: WTheme.cloud,
-                          child: const Center(child: Text('📷', style: TextStyle(fontSize: 26))))),
+                GestureDetector(
+                  onTap: () => _showPhotoLightbox(photo),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(photo.url, height: 90, width: 90, fit: BoxFit.cover,
+                        loadingBuilder: (_, child, progress) => progress == null ? child : Container(
+                            height: 90, width: 90, color: WTheme.cloud,
+                            child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))),
+                        errorBuilder: (_, __, ___) => Container(
+                            height: 90, width: 90, color: WTheme.cloud,
+                            child: const Center(child: Text('📷', style: TextStyle(fontSize: 26))))),
+                  ),
                 ),
                 if (photo.by != null) ...[
                   const SizedBox(height: 3),
