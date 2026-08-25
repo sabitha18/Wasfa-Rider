@@ -174,7 +174,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   _HeroPill(text: '${_driverIcon(order.driverState)} ${_driverLabel(context, order.driverState)}'),
                   _HeroPill(
-                    text: order.paid ? '✓ PAID' : '${order.payMethod.name.toUpperCase()} · NOT PAID',
+                    // CLIENT-REPORTED (2026-08-25): this used the raw
+                    // enum name directly, which for PayMethod.online
+                    // always literally printed "ONLINE" — client wants
+                    // this to say "GO TAP" specifically, matching their
+                    // actual payment provider's name.
+                    text: order.paid ? '✓ PAID' : '${order.payMethod == PayMethod.online ? 'GO TAP' : order.payMethod.name.toUpperCase()} · NOT PAID',
                     color: order.paid ? WTheme.ok.withOpacity(0.30) : WTheme.warn.withOpacity(0.30),
                   ),
                   // CLIENT-REPORTED (2026-08-22): this pill showed a
@@ -1057,6 +1062,17 @@ class _BigPaymentStatus extends StatelessWidget {
       label = context.tr('paymentLinkSent'); sub = context.tr('confirmPatientPaid');
       methodLabel = context.tr('linkCap'); icon = '🔗';
       gradColors = [WTheme.ok, const Color(0xFF1A9C68)];
+    } else if (method == PayMethod.online) {
+      // CLIENT-REPORTED (2026-08-25): confirmed live — an order placed
+      // via POS with an online payment method (e.g. "GO TAP") that
+      // hasn't actually been paid yet was falling into the cash branch
+      // below by default, showing "COLLECT CASH — cash on delivery"
+      // for an order that was never supposed to be paid in cash at
+      // all. PayMethod only had explicit branches for knet and link —
+      // online was simply never accounted for, so it fell through.
+      label = context.tr('awaitingOnlinePayment'); sub = context.tr('doNotCollectCash');
+      methodLabel = context.tr('onlineCap'); icon = '🌐';
+      gradColors = [WTheme.sky, const Color(0xFF1577AC)];
     } else {
       label = context.tr('collectCash'); sub = context.tr('exactChangePreferred');
       methodLabel = context.tr('cashOnDelivery'); icon = '💵';

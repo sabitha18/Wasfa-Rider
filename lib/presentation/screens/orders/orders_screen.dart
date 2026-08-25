@@ -593,13 +593,22 @@ class _OrderListCard extends StatelessWidget {
                     ]),
                     const SizedBox(height: 10),
                     // Row 5: Pay chip + driver state + SLA
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      Row(children: [
-                        PayChip(method: order.payMethod, paid: order.paid),
-                        const SizedBox(width: 6),
-                        DriverStatePill(state: order.driverState, small: true,
-                            pharmaciesPicked: order.pharmaciesPicked, pharmaciesTotal: order.pharmaciesTotal),
-                      ]),
+                    // CLIENT-REPORTED (2026-08-25): confirmed live —
+                    // the longer "ONLINE · NOT PAID" text (added for the
+                    // previous fix) pushed this row past the card's
+                    // available width, clipping the SLA countdown at
+                    // the edge ("00:28:49 lef[t]"). Root cause wasn't
+                    // really the text length — this Row had no width
+                    // constraint or wrapping at all, so ANY combination
+                    // of chips wide enough would eventually overflow the
+                    // same way. Switched to Wrap (matching the exact
+                    // pattern the meta footer just below already uses)
+                    // so chips move to a new line instead of clipping,
+                    // regardless of how long any label ends up being.
+                    Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      PayChip(method: order.payMethod, paid: order.paid),
+                      DriverStatePill(state: order.driverState, small: true,
+                          pharmaciesPicked: order.pharmaciesPicked, pharmaciesTotal: order.pharmaciesTotal),
                       if (order.status != OrderStatus.done && order.status != OrderStatus.failed)
                         SlaCountdown(order: order, size: 's'),
                     ]),

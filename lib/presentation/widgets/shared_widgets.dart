@@ -211,11 +211,20 @@ class PayChip extends StatelessWidget {
     if (paid) {
       return _chip(WTheme.ok.withOpacity(0.15), WTheme.ok, '✓ PAID');
     }
+    // CLIENT-REPORTED (2026-08-25): confirmed live via video — an order
+    // placed via POS with an online payment method ("GO TAP") that was
+    // NOT actually paid (confirmed both on backend's own admin system
+    // and correctly reflected in order.paid == false) still showed
+    // "✓ PAID" on the Orders list. Root cause: this switch is only ever
+    // reached when paid is false (the true case is handled above), but
+    // the online case hardcoded "✓ PAID" anyway regardless — an online
+    // payment method never guarantees the payment actually completed,
+    // as this exact order proved.
     return switch (method) {
       PayMethod.cash   => _chip(WTheme.warn.withOpacity(0.15), const Color(0xFFB4730E), '💵 CASH'),
       PayMethod.knet   => _chip(WTheme.sky.withOpacity(0.12),  WTheme.sky,              '💳 KNET'),
       PayMethod.link   => _chip(WTheme.ok.withOpacity(0.12),   WTheme.ok,               '🔗 LINK'),
-      PayMethod.online => _chip(WTheme.ok.withOpacity(0.15),   WTheme.ok,               '✓ PAID'),
+      PayMethod.online => _chip(WTheme.warn.withOpacity(0.15), const Color(0xFFB4730E), '🌐 GO TAP · NOT PAID'),
     };
   }
 
