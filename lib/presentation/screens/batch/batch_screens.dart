@@ -739,36 +739,34 @@ class SinglePharmacyStopScreen extends StatelessWidget {
                   ...richItems.map((item) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // CLIENT-REPORTED (2026-08-22): a real, valid image
-                      // URL was confirmed in the raw response, but the
-                      // thumbnail showed completely blank — no image, no
-                      // fallback emoji either. Root cause: BoxDecoration's
-                      // DecorationImage has no loading or error state at
-                      // all — while an image is still fetching, or if it
-                      // ever fails to load, it just silently shows
-                      // nothing, revealing the plain background color.
-                      // Image.network (used directly here instead)
-                      // supports both loadingBuilder and errorBuilder,
-                      // so a fallback is always visible instead of a
-                      // blank box during that window.
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: Container(
-                          width: 52, height: 52,
-                          color: WTheme.blush,
-                          child: item.imageUrl != null
-                              ? Image.network(
-                                  item.imageUrl!,
-                                  width: 52, height: 52,
-                                  fit: BoxFit.cover,
-                                  loadingBuilder: (context, child, progress) =>
-                                      progress == null ? child : const Center(child: SizedBox(
-                                          width: 18, height: 18,
-                                          child: CircularProgressIndicator(strokeWidth: 2))),
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
-                                )
-                              : const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
+                      // CLIENT-REPORTED (2026-08-27) follow-up: this
+                      // image had no tap handler at all — the same
+                      // tap-to-enlarge lightbox already exists for
+                      // building photos and Order Detail's own item
+                      // images, but was never added here too. Reuses
+                      // the exact same pattern (dark overlay, ×
+                      // close, pinch-to-zoom via InteractiveViewer).
+                      GestureDetector(
+                        onTap: item.imageUrl != null ? () => _showItemLightbox(context, item) : null,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            width: 52, height: 52,
+                            color: WTheme.blush,
+                            child: item.imageUrl != null
+                                ? Image.network(
+                                    item.imageUrl!,
+                                    width: 52, height: 52,
+                                    fit: BoxFit.cover,
+                                    loadingBuilder: (context, child, progress) =>
+                                        progress == null ? child : const Center(child: SizedBox(
+                                            width: 18, height: 18,
+                                            child: CircularProgressIndicator(strokeWidth: 2))),
+                                    errorBuilder: (context, error, stackTrace) =>
+                                        const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
+                                  )
+                                : const Center(child: Text('💊', style: TextStyle(fontSize: 20))),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -821,6 +819,74 @@ class SinglePharmacyStopScreen extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+
+  // CLIENT-REPORTED (2026-08-27): matches the same lightbox pattern
+  // already used for building photos (order_detail_screen.dart) and
+  // Order Detail's own item images — dark overlay, × close top-right,
+  // tap-to-dismiss, pinch-to-zoom via InteractiveViewer. This screen's
+  // item images never had this at all.
+  void _showItemLightbox(BuildContext context, OrderItem item) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.85),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.of(ctx).pop(),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Stack(children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 5.0,
+                child: Center(
+                  child: Image.network(
+                    item.imageUrl!,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (_, child, progress) => progress == null ? child : const Center(
+                        child: CircularProgressIndicator(color: Colors.white)),
+                    errorBuilder: (_, __, ___) => const Center(
+                        child: Text('💊', style: TextStyle(fontSize: 80))),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 20, right: 20, bottom: MediaQuery.of(ctx).padding.bottom + 20,
+              child: GestureDetector(
+                onTap: () {}, // prevent tap-through onto the dismiss barrier
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(12)),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    Text(item.name, style: GoogleFonts.dmSans(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    Text('${item.price.toStringAsFixed(3)} ${context.tr('kd')} · ×${item.qty}',
+                        style: GoogleFonts.dmSans(color: Colors.white70, fontSize: 12)),
+                  ]),
+                ),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(ctx).padding.top + 20,
+              right: 20,
+              child: GestureDetector(
+                onTap: () => Navigator.of(ctx).pop(),
+                child: Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.20),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
+                  ),
+                  child: const Center(child: Text('×', style: TextStyle(
+                      color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800))),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }

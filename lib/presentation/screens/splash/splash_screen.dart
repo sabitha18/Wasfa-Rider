@@ -16,21 +16,17 @@ class SplashScreen extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 88, height: 88,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  colors: [Color(0xFFE7609F), Color(0xFF1E9CD7)],
-                ),
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [BoxShadow(color: const Color(0xFFE7609F).withOpacity(0.35), blurRadius: 30, offset: const Offset(0, 12))],
-              ),
-              child: Center(
-                child: Text('W', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800)),
-              ),
-            ),
-            const SizedBox(height: 18),
+            // CLIENT-REQUESTED (2026-08-28): replaced the placeholder
+            // "W" text with the real WASFA Riders logo. Dropped the
+            // gradient-square frame that used to sit behind the "W" —
+            // the real logo already has its own pink/blue coloring
+            // (capsule pills + scooter), so nesting it inside another
+            // gradient box would compete visually rather than look
+            // clean. Asset path assumes assets/images/logo_icon.png —
+            // see the accompanying note for the exact pubspec.yaml line
+            // needed and where to place the file.
+            Image.asset('assets/images/logo_icon.png', width: 160),
+            const SizedBox(height: 12),
             Text('WASFA Rider', style: GoogleFonts.dmSans(
               color: const Color(0xFF023B60), fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: -0.2,
             )),

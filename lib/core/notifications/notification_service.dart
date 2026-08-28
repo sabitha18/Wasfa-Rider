@@ -71,6 +71,20 @@ class NotificationService {
       await _localNotifications.initialize(
         settings: const InitializationSettings(
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          // CLIENT-REPORTED (2026-08-27): confirmed live — a push for a
+          // newly assigned order never showed up on iOS. This was
+          // missing entirely: without iOS-specific initialization
+          // settings, the plugin isn't properly set up to show
+          // notifications on iOS at all. requestAlertPermission/etc are
+          // set false here since _fcm.requestPermission() above already
+          // asked for permission via Firebase directly — asking twice
+          // through two different paths risks a confusing double
+          // prompt or one silently overriding the other.
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: false,
+            requestBadgePermission: false,
+            requestSoundPermission: false,
+          ),
         ),
         // Fires when the driver taps the local notification we showed
         // ourselves (i.e. a push that arrived while the app was already
@@ -161,6 +175,16 @@ class NotificationService {
           channelDescription: 'Notifies you when a new delivery order is assigned',
           importance: Importance.high,
           priority: Priority.high,
+        ),
+        // CLIENT-REPORTED (2026-08-27): confirmed live — this call had
+        // no iOS-specific details at all, only Android's. Even with
+        // initialization fixed above, this specific call is what
+        // actually shows the notification, and without DarwinNotification
+        // Details here it likely wouldn't display on iOS regardless.
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
       payload: message.data['order_id'], // read back in onDidReceiveNotificationResponse above
