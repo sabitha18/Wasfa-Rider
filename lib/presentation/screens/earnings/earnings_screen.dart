@@ -147,6 +147,19 @@ class _EarningsScreenState extends State<EarningsScreen> {
       if (mounted) setState(() => _now = DateTime.now());
     });
     _fetchPeriodData('today'); // now fetched immediately too, so Today's chart is real from the start
+    // CLIENT-REQUESTED (2026-09-01): completed/failed delivery stats
+    // used to read from the shared _orders list, back when that was
+    // sourced from tab=all. Now that _orders is active-only (see
+    // OrdersViewModel.load()), this screen fetches its own data
+    // directly instead. Uses tab=all specifically, not tab=done —
+    // confirmed live earlier in this project that tab=all can return
+    // MORE orders than tab=active+tab=done combined (6 vs 3 in that
+    // test), meaning some orders — likely failed ones — exist in
+    // neither individually. tab=all is the only source confirmed to
+    // include everything.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<OrdersViewModel>().loadTab('all');
+    });
   }
 
   @override
@@ -163,8 +176,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final earnings = driver?.todayEarnings ?? 0.0;
     final onShift  = driver?.onShift ?? false;
 
-    final done   = ordersVM.orders.where((o) => o.status == OrderStatus.done).toList();
-    final failed = ordersVM.orders.where((o) => o.status == OrderStatus.failed).length;
+    // CLIENT-REQUESTED (2026-09-01): reads from the dedicated tab=all
+    // fetch now (see initState above) — not tab=done, since tab=done
+    // isn't confirmed to include failed orders (see initState's own
+    // note on this), and not the shared _orders list, since that's
+    // active-only now and would always show 0 here otherwise.
+    final allOrders = ordersVM.ordersForTab('all');
+    final done   = allOrders.where((o) => o.status == OrderStatus.done).toList();
+    final failed = allOrders.where((o) => o.status == OrderStatus.failed).length;
     final totalKm = done.fold(0.0, (s, o) => s + o.distanceKm);
 
     final isToday = _period == 'today';

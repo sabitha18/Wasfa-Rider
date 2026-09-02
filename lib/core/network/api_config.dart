@@ -13,7 +13,8 @@
 class ApiConfig {
   ApiConfig._();
 
-  static const String baseUrl = 'https://portal.apixservices.com/api/driver';
+  //static const String baseUrl = 'https://portal.apixservices.com/api/driver';
+  static const String baseUrl = 'https://apixrx.com/api/driver';
 
   // ── Auth ──────────────────────────────────────────────────────
   static const String login       = '/login';        // POST {email, password, fcm_token}

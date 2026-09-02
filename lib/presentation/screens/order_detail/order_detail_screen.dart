@@ -96,7 +96,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       // so we can tell whether this is an ID-format mismatch, a genuine
       // race with the order list refreshing this order out from under the
       // screen, or something else entirely. Remove once confirmed/fixed.
-      debugPrint('[OrderDetail] "$orderId" not found. Currently loaded IDs: ${vm.orders.map((o) => o.id).toList()}');
+      // Includes _tabOrders IDs too now, matching what findById actually
+      // searches — see its own updated doc for why.
+      final allLoadedIds = {
+        ...vm.orders.map((o) => o.id),
+        ...vm.ordersForTab('active').map((o) => o.id),
+        ...vm.ordersForTab('done').map((o) => o.id),
+        ...vm.ordersForTab('all').map((o) => o.id),
+      };
+      debugPrint('[OrderDetail] "$orderId" not found. Currently loaded IDs: $allLoadedIds');
       return Scaffold(
         appBar: AppBar(
           backgroundColor: Colors.transparent, elevation: 0,
@@ -1484,7 +1492,19 @@ class _DriverActionBarState extends State<_DriverActionBar> {
         labelColor = WTheme.aqua;
         onConfirm  = widget.order.multiPharmacy
             ? () => Future.microtask(widget.onMultiPickup)
-            : () { _transition(DriverState.pickedUp); };
+            // Same fix as HomeScreen's identical branch — see its own
+            // comment for the full root-cause explanation (backend's
+            // /arrive endpoint rejecting with "Pick up from all
+            // pharmacies first" because this only ever updated the
+            // generic status, never the dedicated per-pharmacy pickup
+            // endpoint /arrive actually checks against).
+            : () {
+                if (widget.order.pharmacies.isNotEmpty) {
+                  context.read<OrdersViewModel>().markPharmacyPickedUp(widget.order.id, widget.order.pharmacies.first);
+                } else {
+                  _transition(DriverState.pickedUp);
+                }
+              };
       case DriverState.pickedUp:
         stepLabel  = context.tr('step3ItemsInHand');
         swipeLabel = context.tr('headingToPatient');
@@ -1496,7 +1516,23 @@ class _DriverActionBarState extends State<_DriverActionBar> {
         swipeLabel = context.tr('arrivedAtPatient');
         swipeColor = WTheme.aqua;
         labelColor = WTheme.aqua;
-        onConfirm  = () => Future.microtask(widget.onArrive);
+        // CLIENT-REPORTED (2026-09-02): confirmed live via logcat —
+        // swiping "arrived at patient" from Order Detail went straight
+        // to the payment screen with NO /arrive request in the log at
+        // all, while the identical swipe from Home correctly made that
+        // call. Root cause: Home's own onArrive (see its _ActiveOrderCard
+        // wiring) does two separate things — calls
+        // ordersVM.arriveAtPatient() (the actual /arrive API call, which
+        // records the arrival on backend) and THEN calls widget.onArrive
+        // (main.dart's refresh-and-navigate logic). This screen only
+        // ever did the second half — it never called arriveAtPatient()
+        // at all, meaning every delivery completed via Order Detail's
+        // own arrive swipe never actually told backend the driver had
+        // arrived. Matches Home's same two-step order now.
+        onConfirm  = () {
+          context.read<OrdersViewModel>().arriveAtPatient(widget.order.id);
+          Future.microtask(widget.onArrive);
+        };
     }
 
     return Column(children: [

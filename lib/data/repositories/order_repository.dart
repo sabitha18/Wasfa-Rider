@@ -15,8 +15,35 @@ import '../models/models.dart';
 class OrderRepository {
   final _api = ApiClient.instance;
 
-  Future<List<Order>> fetchOrders({String tab = 'active'}) async {
-    final res = await _api.get(ApiConfig.orders, query: {'tab': tab});
+  /// CLIENT-REQUESTED (2026-08-31): tab labels ("Done (50)") were showing
+  /// a client-side count over whatever's currently in the in-memory list
+  /// — misleading once that list is only a partial/paginated slice, since
+  /// the label looked like a real total but was actually just "however
+  /// many happen to be loaded right now". Backend's own response already
+  /// includes an authoritative "counts" object with the REAL totals
+  /// (e.g. {"active":0,"done":4183,"all":4241}) — now returned alongside
+  /// the parsed order list so the UI can show the real number.
+  ///
+  /// [dateFrom]/[dateTo] — CLIENT-ASKED (2026-08-31): requested from
+  /// Soumya as `YYYY-MM-DD`, filtering by created_at, applied BEFORE
+  /// pagination on her end (not after — see the actual ask for why that
+  /// distinction matters). NOT YET CONFIRMED live as of this writing —
+  /// sent whenever a date filter other than "All" is active, but
+  /// written defensively: an unrecognized query param is typically just
+  /// ignored by a server that hasn't implemented it yet, so this should
+  /// be safe to send regardless. The existing client-side date filter
+  /// in orders_screen.dart stays in place either way, as a safety net —
+  /// this isn't replacing that, just supplementing it once backend
+  /// support is confirmed.
+  Future<({List<Order> orders, Map<String, int> counts})> fetchOrders({
+    String tab = 'active',
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final query = <String, dynamic>{'tab': tab};
+    if (dateFrom != null) query['date_from'] = dateFrom;
+    if (dateTo != null) query['date_to'] = dateTo;
+    final res = await _api.get(ApiConfig.orders, query: query);
     // CONFIRMED v2: top-level key is "list", not "data"/"orders".
     final list = (res['list'] ?? res['data'] ?? res['orders'] ?? const []) as List;
     // TEMP DEBUG (missing-order investigation): log exactly what codes came
@@ -41,7 +68,13 @@ class OrderRepository {
     if (dropped > 0) {
       debugPrint('[fetchOrders] tab=$tab DROPPED $dropped entr${dropped == 1 ? "y" : "ies"} with blank id after parsing — this is a parsing bug, not a backend/assignment issue.');
     }
-    return parsed.where((o) => o.id.isNotEmpty).toList();
+    final rawCounts = res['counts'];
+    final counts = <String, int>{
+      'active': rawCounts is Map ? (int.tryParse('${rawCounts['active']}') ?? 0) : 0,
+      'done': rawCounts is Map ? (int.tryParse('${rawCounts['done']}') ?? 0) : 0,
+      'all': rawCounts is Map ? (int.tryParse('${rawCounts['all']}') ?? 0) : 0,
+    };
+    return (orders: parsed.where((o) => o.id.isNotEmpty).toList(), counts: counts);
   }
 
   /// CONFIRMED LIVE shape (2026-07-14): {"order": {...fields...}, "items":

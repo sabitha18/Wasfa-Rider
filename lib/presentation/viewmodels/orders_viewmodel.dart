@@ -21,6 +21,15 @@ class OrdersViewModel extends ChangeNotifier {
   // once; _mergedPharmacies then correctly preserves that picked-up
   // data across subsequent list-only refreshes on its own.
   final Set<String> _detailBackfilledOrderIds = {};
+  // CLIENT-REQUESTED (2026-08-31): the real, authoritative totals from
+  // backend's own "counts" object — e.g. {"active":0,"done":4183,"all":
+  // 4241} — as opposed to a client-side count over whatever's currently
+  // in the in-memory _orders list, which is only ever a partial slice
+  // once pagination is involved. Updated from whichever fetch most
+  // recently completed (all three tabs return the same global totals
+  // regardless of which tab was actually requested).
+  Map<String, int> _serverCounts = const {};
+  Map<String, int> get serverCounts => _serverCounts;
 
   List<Order> _orders = [];
   Batch? _pendingBatch;
@@ -50,6 +59,49 @@ class OrdersViewModel extends ChangeNotifier {
   List<Order> get doneOrders => _orders.where((o) =>
   o.status == OrderStatus.done || o.status == OrderStatus.failed).toList();
 
+  // CLIENT-REQUESTED (2026-08-31): "for active use active api, for all
+  // use all api, for done use done api, and the count and all from api"
+  // — each tab on the Orders screen now gets its OWN independent fetch
+  // from its OWN endpoint, with its OWN count taken directly from that
+  // same response. This replaces the earlier approach (a single shared
+  // list, with tab=done additively merged into it) — that was a
+  // reasonable interim fix, but this is the actual, correctly-scoped
+  // architecture: three separate data sources, never mixed together.
+  //
+  // Deliberately kept SEPARATE from _orders/load() above — that shared
+  // list and its 20s auto-refresh cycle continues to power Home's
+  // activeOrder/activeOrders independently, and nothing here should
+  // affect that in any way.
+  final Map<String, List<Order>> _tabOrders = {};
+  final Map<String, Map<String, int>> _tabCounts = {};
+  final Map<String, bool> _tabLoading = {};
+
+  List<Order> ordersForTab(String tab) => _tabOrders[tab] ?? const [];
+  Map<String, int> countsForTab(String tab) => _tabCounts[tab] ?? const {};
+  bool isLoadingTab(String tab) => _tabLoading[tab] ?? false;
+
+  /// Fetches this specific tab's data fresh from its own endpoint
+  /// (tab=active / tab=done / tab=all) and stores it independently —
+  /// never mixed with either _orders or another tab's own data.
+  /// [dateFrom]/[dateTo] — passed straight through to the repository;
+  /// see fetchOrders's own doc for the full context on this ask.
+  Future<void> loadTab(String tab, {String? dateFrom, String? dateTo}) async {
+    _tabLoading[tab] = true;
+    notifyListeners();
+    try {
+      final result = await _repo.fetchOrders(tab: tab, dateFrom: dateFrom, dateTo: dateTo);
+      _tabOrders[tab] = result.orders;
+      _tabCounts[tab] = result.counts;
+    } catch (e) {
+      debugPrint('[OrdersViewModel] loadTab($tab) failed: $e');
+      // Non-fatal — whatever this tab last successfully showed (or
+      // nothing, on a first-ever failed load) just stays as-is.
+    } finally {
+      _tabLoading[tab] = false;
+      notifyListeners();
+    }
+  }
+
   /// Call from a FutureBuilder / initState instead of the old sync init().
   /// Loads active orders + any pending batch offer from the real API.
   /// [silent] — CLIENT-REPORTED (2026-08-18): the red "Could not reach
@@ -70,17 +122,6 @@ class OrdersViewModel extends ChangeNotifier {
     if (!silent) error = null;
     notifyListeners();
     try {
-      // CLIENT-REPORTED: Orders screen's "All" tab was only ever showing
-      // active+done merged client-side, never backend's own tab=all —
-      // and backend's tab=all returns MORE orders than active+done
-      // combined (confirmed live via Postman: 6 orders under tab=all vs.
-      // only 3 covered between tab=active + tab=done — so some orders
-      // exist that neither of those two individually returns, likely
-      // ones with a status like "failed" that backend's own done-tab
-      // query doesn't include). Fetch tab=all directly — it's backend's
-      // own complete list, and activeOrder/activeOrders/doneOrders below
-      // are already computed by filtering _orders locally, so nothing
-      // else needs to change once _orders actually has everything in it.
       // CLIENT-REPORTED (2026-08-12): a status swipe (e.g. pending ->
       // collecting) was seen reverting back to "pending" after leaving
       // and returning to this order — either via Order Detail's own
@@ -91,7 +132,21 @@ class OrdersViewModel extends ChangeNotifier {
       // it, and what raw driver_state the list endpoint returned.
       final previous = {for (final o in _orders) o.id: o.driverState};
       final previousById = {for (final o in _orders) o.id: o};
-      final fresh = await _repo.fetchOrders(tab: 'all');
+      // CLIENT-REQUESTED (2026-09-01): "why not use the active API
+      // directly?" — this used to call tab=all (needing thousands of
+      // done orders downloaded on every 20s poll just to find the
+      // handful of active ones) plus a SEPARATE supplemental tab=active
+      // rescue call to patch around tab=all's real, confirmed bug where
+      // it could omit an active order once enough done orders piled up.
+      // Now calls tab=active directly as the only source — simpler,
+      // faster, and immune to that whole class of bug by construction,
+      // since it was never mixing in unrelated done-order history to
+      // begin with. Profile and Earnings, which DO need done-order
+      // data, now fetch that themselves via loadTab('done') — see their
+      // own screens — rather than relying on this shared list.
+      final result = await _repo.fetchOrders(tab: 'active');
+      final fresh = result.orders;
+      _serverCounts = result.counts;
       for (final o in fresh) {
         final before = previous[o.id];
         if (before != null && before != o.driverState) {
@@ -393,7 +448,22 @@ class OrdersViewModel extends ChangeNotifier {
     super.dispose();
   }
 
-  Order? findById(String id) => _orders.firstWhereOrNull((o) => o.id == id);
+  /// CLIENT-REQUESTED (2026-09-01): now that _orders is sourced from
+  /// tab=active alone (see load() above), it only ever contains
+  /// active-state orders — but Order Detail can be opened for ANY
+  /// order, including a done one (e.g. tapping into a completed order
+  /// from the Done tab to see its receipt). Falls back to whatever's
+  /// been loaded into _tabOrders (done/all) if not found in the active
+  /// list, so this still works regardless of which screen led here.
+  Order? findById(String id) {
+    final inActive = _orders.firstWhereOrNull((o) => o.id == id);
+    if (inActive != null) return inActive;
+    for (final tabList in _tabOrders.values) {
+      final found = tabList.firstWhereOrNull((o) => o.id == id);
+      if (found != null) return found;
+    }
+    return null;
+  }
 
   void _updateOrder(String id, Order updated) {
     final idx = _orders.indexWhere((o) => o.id == id);
@@ -763,6 +833,26 @@ class OrdersViewModel extends ChangeNotifier {
     _orders
       ..clear()
       ..addAll([...updatedPool, ...others]);
+
+    // CLIENT-REPORTED (2026-09-01): reorder succeeded on the server and
+    // Home updated correctly, but the Orders screen's own "Active" tab
+    // kept showing the old sequence until a full reload. Root cause:
+    // this method only ever updated _orders — which, since the per-tab
+    // rework, powers ONLY Home's display now. The Orders screen reads
+    // from _tabOrders['active'] instead, which this never touched at
+    // all. Mirror the same update there (and into 'all', by id, so
+    // that tab's mixed active+done list also reflects the new sequence
+    // immediately rather than only after its own next re-fetch).
+    if (_tabOrders.containsKey('active')) {
+      _tabOrders['active'] = List<Order>.from(updatedPool);
+    }
+    if (_tabOrders.containsKey('all')) {
+      final updatedById = {for (final o in updatedPool) o.id: o};
+      _tabOrders['all'] = _tabOrders['all']!
+          .map((o) => updatedById[o.id] ?? o)
+          .toList();
+    }
+
     notifyListeners();
   }
 }

@@ -40,6 +40,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _role = newRole);
   }
 
+  // CLIENT-REQUESTED (2026-09-01): completed-order stats (count, total
+  // km) used to read from the shared _orders list, back when that was
+  // sourced from tab=all. Now that _orders is active-only (see
+  // OrdersViewModel.load()), this screen fetches its own data directly
+  // instead. Uses tab=all specifically, not tab=done — confirmed live
+  // earlier in this project that tab=all can return MORE orders than
+  // tab=active+tab=done combined (6 vs 3 in that test), meaning some
+  // orders — likely failed ones — exist in neither individually.
+  // tab=all is the only source confirmed to include everything.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<OrdersViewModel>().loadTab('all');
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final appVM   = context.watch<AppViewModel>();
@@ -47,9 +64,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final driver  = appVM.driver;
     if (driver == null) return const Scaffold();
 
-    final done    = ordersVM.orders.where((o) => o.status.name == 'done').length;
-    final totalKm = ordersVM.orders.where((o) => o.status.name == 'done')
-        .fold(0.0, (s, o) => s + o.distanceKm);
+    final doneOrders = ordersVM.ordersForTab('all').where((o) => o.status.name == 'done').toList();
+    final done    = doneOrders.length;
+    final totalKm = doneOrders.fold(0.0, (s, o) => s + o.distanceKm);
 
     return Scaffold(
       backgroundColor: WTheme.blush,

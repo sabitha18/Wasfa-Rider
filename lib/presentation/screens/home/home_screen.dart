@@ -572,12 +572,29 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
               ),
               const SizedBox(width: 10),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('#${order.id}', style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 20, color: WTheme.navy, letterSpacing: -0.4)),
+                // CLIENT-REPORTED (2026-09-01): when the payment chip
+                // shows its longer label ("GO TAP · NOT PAID"), it takes
+                // up enough of this row's width that the order ID's
+                // Expanded column gets squeezed narrow — and since this
+                // Text had no overflow handling at all, it wrapped onto
+                // an awkward second line instead of staying on one.
+                // maxLines+ellipsis truncates cleanly instead.
+                Text('#${order.id}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, fontSize: 20, color: WTheme.navy, letterSpacing: -0.4)),
                 const SizedBox(height: 3),
+                // CLIENT-REPORTED (2026-09-01) follow-up: the order ID
+                // fix above wasn't the only overflow source on this row
+                // — this patient-name Text had no overflow handling
+                // either, and with no Expanded/Flexible around it, it
+                // had no bounded width to even truncate against. Real,
+                // confirmed RenderFlex overflow seen live ("RIGHT
+                // OVERFLOWED BY 1.7 PIXELS") once the longer "GO TAP ·
+                // NOT PAID" chip squeezed this row's remaining space.
                 Row(children: [
                   const Text('👤', style: TextStyle(fontSize: 11)),
                   const SizedBox(width: 4),
-                  Text(order.patient, style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600)),
+                  Expanded(child: Text(order.patient, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600))),
                 ]),
               ])),
               PayChip(method: order.payMethod, paid: order.paid),
@@ -824,7 +841,32 @@ class _ActiveOrderCardState extends State<_ActiveOrderCard> {
         labelColor = WTheme.aqua;
         onConfirm = order.multiPharmacy
             ? () => Future.microtask(widget.onMultiPickup)
-            : () => widget.onTransitionState(order.id, DriverState.pickedUp);
+            // CLIENT-REPORTED (2026-09-02): confirmed live via logcat —
+            // swiping through to "arrived at patient" on a single-
+            // pharmacy order got rejected by backend's own /arrive
+            // endpoint with 409 "Pick up from all pharmacies first"
+            // ({"picked_count":0,"pharmacy_count":1}) — even though
+            // driver_state had already reached onMyWay. Root cause: this
+            // branch only ever called the generic status-update endpoint
+            // (driver_state -> pickedUp), which backend accepts without
+            // requiring pickup confirmation — but never actually called
+            // the DEDICATED per-pharmacy pickup endpoint that increments
+            // picked_count, the thing /arrive actually checks. Only the
+            // multi-pharmacy flow ever called that correctly. Now calls
+            // the same markPharmacyPickedUp used there, for this order's
+            // one pharmacy — it already handles the driverState
+            // transition to pickedUp internally once complete, so no
+            // separate onTransitionState call is needed here anymore.
+            : () {
+                if (order.pharmacies.isNotEmpty) {
+                  context.read<OrdersViewModel>().markPharmacyPickedUp(order.id, order.pharmacies.first);
+                } else {
+                  // Defensive fallback — should not happen for a real
+                  // order, but avoids silently doing nothing if pharmacy
+                  // data is ever missing for some reason.
+                  widget.onTransitionState(order.id, DriverState.pickedUp);
+                }
+              };
       case DriverState.pickedUp:
         stepLabel = context.tr('step3ItemsInHand');
         swipeLabel = context.tr('headingToPatient');

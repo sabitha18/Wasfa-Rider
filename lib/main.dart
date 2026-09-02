@@ -580,8 +580,21 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       case 'success':
         final delivered = ordersVM.findById(_lastDeliveredId ?? '');
         final next = ordersVM.activeOrder;
+        // CLIENT-REQUESTED (2026-09-01): doneOrders (derived from
+        // _orders) is always empty now that _orders is sourced from
+        // tab=active alone — see OrdersViewModel.load(). findById above
+        // already checks _tabOrders as a fallback (so this almost
+        // always succeeds anyway, since the order was just active this
+        // session), but this last-resort fallback needs its own
+        // updated source too. Uses 'all' rather than 'done' — nothing
+        // else in the app triggers loadTab('done') anymore (Profile and
+        // Earnings both use 'all', for reasons noted in their own
+        // initState), so relying on 'done' here would only work by
+        // coincidence if the driver happened to have visited the
+        // Orders screen first this session.
+        final doneFallback = ordersVM.ordersForTab('all').where((o) => o.status == OrderStatus.done).toList();
         return SuccessScreen(
-          order: delivered ?? ordersVM.doneOrders.last,
+          order: delivered ?? doneFallback.last,
           nextOrder: next,
           earningsBump: (delivered?.total ?? 0) * 0.15,
           onContinue: () => _changeTab('home'),

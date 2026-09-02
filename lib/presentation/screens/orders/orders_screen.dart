@@ -38,12 +38,62 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Order? _addrOrder;
 
   // ── Date filter state ──
-  String _dateFilter = 'all'; // 'today', 'yesterday', 'week', 'all', 'custom'
+  String _dateFilter = 'today'; // 'today', 'yesterday', 'week', 'all', 'custom'
   DateTime? _customDate;
 
-  static const _activeStatuses = {
-    OrderStatus.active, OrderStatus.next, OrderStatus.later, OrderStatus.batchPending
-  };
+  // CLIENT-REQUESTED (2026-08-31): "for active use active api, for all
+  // use all api, for done use done api, and the count and all from api"
+  // — fetches all three tabs on screen open, so every tab's label shows
+  // its own real, accurate count immediately, even though only one
+  // tab's list is actually visible at a time. See OrdersViewModel's
+  // loadTab for how each tab's data is kept fully independent.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reloadAllTabs());
+  }
+
+  String _fmtDateParam(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// CLIENT-ASKED (2026-08-31): computes the exact date_from/date_to
+  /// this screen's currently-selected date filter maps to, matching
+  /// what was requested from Soumya — same value twice for a single day
+  /// (Today/Yesterday/a custom pick), a real range for This Week, and
+  /// neither param at all for "All" (no filter — don't restrict at all).
+  (String?, String?) _computeDateRange() {
+    final now = DateTime.now();
+    if (_customDate != null) {
+      final s = _fmtDateParam(_customDate!);
+      return (s, s);
+    }
+    switch (_dateFilter) {
+      case 'today':
+        final s = _fmtDateParam(now);
+        return (s, s);
+      case 'yesterday':
+        final s = _fmtDateParam(now.subtract(const Duration(days: 1)));
+        return (s, s);
+      case 'week':
+        return (_fmtDateParam(now.subtract(const Duration(days: 7))), _fmtDateParam(now));
+      default:
+        return (null, null); // 'all' — no date restriction
+    }
+  }
+
+  /// Re-fetches all three tabs using the currently-selected date range —
+  /// called on screen open and whenever the date filter itself changes,
+  /// so every tab's count and list both reflect the active date filter
+  /// once backend support for date_from/date_to is confirmed live. The
+  /// existing client-side _matchesDate filter (used by _filtered/_count
+  /// below) stays in place regardless, as a safety net either way.
+  void _reloadAllTabs() {
+    final vm = context.read<OrdersViewModel>();
+    final (from, to) = _computeDateRange();
+    vm.loadTab('active', dateFrom: from, dateTo: to);
+    vm.loadTab('done', dateFrom: from, dateTo: to);
+    vm.loadTab('all', dateFrom: from, dateTo: to);
+  }
 
   bool _matchesDate(Order o) {
     final now = DateTime.now();
@@ -67,22 +117,29 @@ class _OrdersScreenState extends State<OrdersScreen> {
     }
   }
 
-  List<Order> _filtered(List<Order> orders) {
-    final byStatus = switch (_filter) {
-      'active' => orders.where((o) => _activeStatuses.contains(o.status)),
-      'done'   => orders.where((o) => o.status == OrderStatus.done || o.status == OrderStatus.failed),
-      _        => orders,
-    };
-    return byStatus.where(_matchesDate).toList();
-  }
+  // CLIENT-REQUESTED (2026-08-31): now that each tab's orders come
+  // directly from that tab's own dedicated endpoint (vm.ordersForTab),
+  // the status filtering that used to happen here is already done —
+  // backend's own tab=active/done/all response only ever contains that
+  // tab's own orders. The only filtering still needed client-side is
+  // the date filter (Today/Yesterday/This Week), since the API has no
+  // date parameter at all.
+  List<Order> _filtered(List<Order> orders) => orders.where(_matchesDate).toList();
 
-  int _count(List<Order> orders, String f) {
-    final byStatus = switch (f) {
-      'active' => orders.where((o) => _activeStatuses.contains(o.status)),
-      'done'   => orders.where((o) => o.status == OrderStatus.done || o.status == OrderStatus.failed),
-      _        => orders,
-    };
-    return byStatus.where(_matchesDate).length;
+  int _count(OrdersViewModel vm, String f) {
+    // CLIENT-REQUESTED (2026-08-31): "for active use active api, for
+    // all use all api, for done use done api, and the count and all
+    // from api" — each tab's count comes directly from THAT tab's own
+    // dedicated fetch (vm.countsForTab), which is now sent WITH the
+    // current date range on every request. CLIENT-CONFIRMED (2026-09-01):
+    // backend now correctly applies date_from/date_to server-side (a
+    // date-filtered request returned an order matching that exact date)
+    // — so the counts object returned for ANY request, date-filtered or
+    // not, is already correctly scoped to that same request's own date
+    // range. No client-side fallback needed anymore: always show
+    // exactly what the API returned for this tab.
+    final serverCounts = vm.countsForTab(f);
+    return serverCounts[f] ?? 0;
   }
 
   Color _edgeColor(Order o) => switch (o.status) {
@@ -98,7 +155,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final appVM    = context.watch<AppViewModel>();
     final vm       = context.watch<OrdersViewModel>();
     final driver   = appVM.driver;
-    final orders   = vm.orders;
+    final orders   = vm.ordersForTab(_filter);
     final filtered = _filtered(orders);
     final canReorder = _filter == 'active' && filtered.length > 1;
 
@@ -137,20 +194,48 @@ class _OrdersScreenState extends State<OrdersScreen> {
           batchOrderIds: vm.batchOrderIds,
           pharmacyName: vm.batchPharmacyName ?? '',
           pharmacyAddr: vm.batchPharmacyAddr ?? '',
-          orders: orders,
+          // CLIENT-REQUESTED (2026-08-31): now that each tab has its own
+          // independent data, this specifically needs the active tab's
+          // orders regardless of which tab the driver currently has
+          // selected — a batch is inherently active work, so it should
+          // never disappear or show stale data just because the driver
+          // happens to be looking at the Done tab right now.
+          orders: vm.ordersForTab('active'),
           pickedUp: vm.batchPickedUp,
           onTap: widget.onOpenBatchPickup,
         ),
-      _FilterTabs(filter: _filter, orders: orders, count: _count,
-          onChanged: (f) => setState(() => _filter = f)),
+      _FilterTabs(filter: _filter, count: _count, vm: vm,
+          onChanged: (f) {
+            setState(() => _filter = f);
+            // CLIENT-REQUESTED (2026-08-31): "for active use active
+            // api, for all use all api, for done use done api" — every
+            // tab switch re-fetches that specific tab fresh from its
+            // own dedicated endpoint, rather than relying on whatever
+            // was loaded earlier. All three tabs are also already
+            // pre-loaded once on screen open (see initState above) so
+            // every tab's count is accurate immediately, even before
+            // the driver has switched to it. Also passes the currently-
+            // active date filter through — switching status tabs should
+            // never silently drop whatever date range (Today/This Week/
+            // custom) was already selected.
+            final (from, to) = _computeDateRange();
+            vm.loadTab(f, dateFrom: from, dateTo: to);
+          }),
       const SizedBox(height: 10),
       _DateFilterRow(
         dateFilter: _dateFilter,
         customDate: _customDate,
-        onChanged: (f) => setState(() {
-          _dateFilter = f;
-          _customDate = null;
-        }),
+        onChanged: (f) {
+          setState(() {
+            _dateFilter = f;
+            _customDate = null;
+          });
+          // CLIENT-ASKED (2026-08-31): re-fetch all three tabs with the
+          // newly-selected date range, once backend support for
+          // date_from/date_to is confirmed live — see fetchOrders's own
+          // doc for the full context on this ask.
+          _reloadAllTabs();
+        },
         onPickCustom: () async {
           final picked = await showDatePicker(
             context: context,
@@ -173,12 +258,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
               _customDate = picked;
               _dateFilter = 'custom';
             });
+            _reloadAllTabs();
           }
         },
-        onClearCustom: () => setState(() {
-          _customDate = null;
-          _dateFilter = 'all';
-        }),
+        onClearCustom: () {
+          setState(() {
+            _customDate = null;
+            _dateFilter = 'all';
+          });
+          _reloadAllTabs();
+        },
       ),
       const SizedBox(height: 14),
       if (canReorder)
@@ -218,7 +307,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
       Expanded(
         child: RefreshIndicator(
           color: WTheme.rose,
-          onRefresh: vm.refresh,
+          onRefresh: () {
+            // Same fix as _buildNormalList's RefreshIndicator — this
+            // list is always the active tab specifically (reorder only
+            // ever applies there), so re-fetch that tab directly rather
+            // than the old, now-unrelated vm.refresh().
+            final (from, to) = _computeDateRange();
+            return vm.loadTab('active', dateFrom: from, dateTo: to);
+          },
           child: ReorderableListView(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
             buildDefaultDragHandles: false,
@@ -269,15 +365,26 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   // ── Normal scroll list (done/all tab) ─────────────────────────
   Widget _buildNormalList(List<Order> filtered, OrdersViewModel vm, List<Order> orders) {
+    // CLIENT-REPORTED (2026-09-01): pull-to-refresh appeared to do
+    // nothing. Root cause: this called vm.refresh(), which only updates
+    // the OLD shared _orders list — but since the per-tab rework, this
+    // screen displays vm.ordersForTab(_filter) instead, a completely
+    // different list that vm.refresh() never touches at all. Fixed to
+    // re-fetch THIS tab specifically, with whatever date range is
+    // currently active.
+    final isLoading = vm.isLoadingTab(_filter);
     return RefreshIndicator(
       color: WTheme.rose,
-      onRefresh: vm.refresh,
+      onRefresh: () {
+        final (from, to) = _computeDateRange();
+        return vm.loadTab(_filter, dateFrom: from, dateTo: to);
+      },
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         children: [
           ..._headers(orders, vm),
           ...filtered.map((o) => _buildCardWidget(o, vm)),
-          if (filtered.isEmpty) _emptyState(),
+          if (filtered.isEmpty) (isLoading ? _loadingState() : _emptyState()),
         ],
       ),
     );
@@ -309,6 +416,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
           style: GoogleFonts.dmSans(color: WTheme.muted, fontWeight: FontWeight.w700)),
     ]),
   );
+
+  Widget _loadingState() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 40),
+    child: Column(children: [
+      SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: WTheme.rose)),
+      const SizedBox(height: 14),
+      Text(context.tr('loading'),
+          style: GoogleFonts.dmSans(color: WTheme.muted, fontWeight: FontWeight.w700)),
+    ]),
+  );
 }
 
 // ── Non-draggable wrapper for header items in ReorderableListView ─
@@ -322,12 +439,11 @@ class _NonDraggableItem extends StatelessWidget {
 
 // ── Filter Tabs ────────────────────────────────────────────────
 class _FilterTabs extends StatelessWidget {
-  const _FilterTabs({required this.filter, required this.orders,
-    required this.count, required this.onChanged});
+  const _FilterTabs({required this.filter, required this.count, required this.onChanged, required this.vm});
   final String filter;
-  final List<Order> orders;
-  final int Function(List<Order>, String) count;
+  final int Function(OrdersViewModel, String) count;
   final ValueChanged<String> onChanged;
+  final OrdersViewModel vm;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -347,7 +463,7 @@ class _FilterTabs extends StatelessWidget {
                   ? [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 6)]
                   : [],
             ),
-            child: Center(child: Text('${f.$2} (${count(orders, f.$1)})',
+            child: Center(child: Text('${f.$2} (${count(vm, f.$1)})',
                 style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700,
                     color: filter == f.$1 ? WTheme.rose : WTheme.muted))),
           ),
