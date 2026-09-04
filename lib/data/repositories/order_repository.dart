@@ -290,7 +290,17 @@ class OrderRepository {
   /// collection still happens here.
   /// [signature] is expected to be a base64 PNG string (adjust if backend
   /// wants a file upload instead — swap for MultipartFile.fromFile).
-  Future<void> finish(
+  /// [signature] is expected to be a base64 PNG string (adjust if backend
+  /// wants a file upload instead — swap for MultipartFile.fromFile).
+  ///
+  /// CLIENT-REQUESTED (2026-09-02): previously returned void, discarding
+  /// the entire response body — meaning there was no way to show the
+  /// real commission earned on this specific delivery, only a fabricated
+  /// client-side guess. Now returns whatever commission_earned actually
+  /// comes back (the exact field name given to Soumya) — null until
+  /// backend adds it, in which case the success screen simply doesn't
+  /// show an earnings bump at all rather than showing a fake number.
+  Future<double?> finish(
       String co, {
         required String podPhotoPath,
         String? method,
@@ -303,7 +313,8 @@ class OrderRepository {
       if (given != null) 'given': given,
       if (signatureBase64 != null) 'signature': signatureBase64,
     });
-    await _api.postMultipart(ApiConfig.path(ApiConfig.finish, {'co': co}), form);
+    final res = await _api.postMultipart(ApiConfig.path(ApiConfig.finish, {'co': co}), form);
+    return (res['commission_earned'] as num?)?.toDouble();
   }
 
   /// Maps an Order to the 'cash'|'knet'|'paid' value /finish expects.

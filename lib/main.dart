@@ -98,6 +98,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   String? _selectedOrderId;
   String? _selectedPhId;
   String? _lastDeliveredId;
+  // CLIENT-REQUESTED (2026-09-02): carries the real commission_earned
+  // from /finish's response (see OrderRepository.finish's own doc)
+  // through to the success screen — same pattern as _lastDeliveredId
+  // just above.
+  double? _lastCommissionEarned;
   bool _ordersLoaded = false;
 
   // ── Navigation helpers ──────────────────────────────────────
@@ -542,7 +547,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         return SignatureScreen(
           order: order,
           onBack: () => _goTo('photo'),
-          onSigned: (signatureBase64) {
+          onSigned: (signatureBase64) async {
             // Use whatever the rider actually tapped on PaymentScreen for
             // THIS order, if anything was recorded — otherwise fall back
             // to the order's originally recorded method (covers orders
@@ -561,14 +566,29 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               _goTo('photo');
               return;
             }
-            ordersVM.markDelivered(
+            // CLIENT-REQUESTED (2026-09-02): now awaited and captured —
+            // previously fire-and-forget, discarding the real
+            // commission_earned value entirely. See markDelivered's own
+            // doc for why this can't go through the shared _guarded()
+            // helper.
+            _lastCommissionEarned = await ordersVM.markDelivered(
               order.id,
               payMethod: methodStr,
               podPhotoPath: photoPath,
               signatureBase64: signatureBase64,
               given: _capturedCashGiven?.toStringAsFixed(3),
             );
-            context.read<AppViewModel>().addEarnings(order.total * 0.15);
+            // CLIENT-REPORTED (2026-09-02): removed entirely — this used
+            // to call addEarnings(order.total * 0.15), a fabricated 15%
+            // commission rate with no connection to the real,
+            // admin-configured rule at all. Worse than just showing a
+            // wrong one-off number: this fed into the app's local
+            // "today's earnings" tracker, which the Earnings screen
+            // shows whichever is HIGHER between this fake local value
+            // and the real API total — meaning the fake number could
+            // actually override and replace the correct one on the main
+            // display. See the /finish response field flagged
+            // separately for Soumya for the real fix.
             _lastDeliveredId = order.id;
             _capturedPodPhotoPath = null;
             _capturedCashGiven = null;
@@ -596,7 +616,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         return SuccessScreen(
           order: delivered ?? doneFallback.last,
           nextOrder: next,
-          earningsBump: (delivered?.total ?? 0) * 0.15,
+          // CLIENT-REQUESTED (2026-09-02): no longer calculated — comes
+          // directly from /finish's own response now (see markDelivered/
+          // _lastCommissionEarned above). Still null, and the bump still
+          // hidden, until Soumya actually adds commission_earned.
+          earningsBump: _lastCommissionEarned,
           onContinue: () => _changeTab('home'),
         );
 

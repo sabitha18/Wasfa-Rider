@@ -677,10 +677,21 @@ class DriverProfile {
   String plateNumber;
   double todayEarnings;
   int deliveriesToday;
-  double rating;
+  double? rating; // CLIENT-REPORTED (2026-09-02): was a non-nullable field
+  // defaulting to a fake 4.9, never actually parsed from any real API
+  // response anywhere — completely unused elsewhere in the app. Now
+  // nullable with no fake default, parsed defensively below in case
+  // backend adds a real field, same pattern as photoUrl just below.
   bool needsVehicle; // CONFIRMED field from /me — true means force the vehicle-setup screen
   String? language; // CONFIRMED field from /me — the driver's saved language ('en'/'ar')
   DateTime? shiftStartedAt; // CONFIRMED field from /me — was never parsed before despite being in the response
+  // CLIENT-REQUESTED (2026-09-02): active/idle time for the current
+  // shift was previously a hardcoded fake value with no backend source
+  // at all. Parsed defensively for the field names given to Soumya
+  // (active_minutes/idle_minutes on /me) — nullable, so the UI shows
+  // "—" until these actually exist in the response.
+  int? activeMinutes;
+  int? idleMinutes;
   // NOT confirmed whether /me returns this yet (only confirmed source so
   // far is the upload response itself: {"ok":true,"url":"..."}). Parsed
   // defensively here so it starts working for free the moment /me adds
@@ -698,10 +709,12 @@ class DriverProfile {
     this.plateNumber = '',
     this.todayEarnings = 0.0,
     this.deliveriesToday = 0,
-    this.rating = 4.9,
+    this.rating,
     this.needsVehicle = false,
     this.language,
     this.shiftStartedAt,
+    this.activeMinutes,
+    this.idleMinutes,
     this.photoUrl,
   });
 
@@ -722,20 +735,26 @@ class DriverProfile {
       plateNumber: j['plate_number'] ?? '',
       needsVehicle: j['needs_vehicle'] == true,
       language: j['language'],
+      // CONFIRMED LIVE (2026-09-02): /me does include this after all —
+      // exact field name matches what was asked for.
+      rating: (j['rating'] as num?)?.toDouble() ?? (j['driver_rating'] as num?)?.toDouble(),
       // Was confirmed present in this response but never actually parsed —
       // the Earnings screen's "Work & Hours" section used a hardcoded
       // fake offset (now.subtract(4h22m)) instead of this real value.
       shiftStartedAt: j['shift_started_at'] != null ? DateTime.tryParse(j['shift_started_at']) : null,
-      // Unconfirmed whether /me includes this — defensive guess at a few
-      // plausible key names. Confirmed-working source is still the
-      // upload response's own "url" field, applied optimistically right
-      // after a successful upload (see profile_screens.dart).
-      photoUrl: j['photo_url'] ?? j['photo'] ?? j['profile_photo'],
+      // CONFIRMED LIVE (2026-09-02): /me does include these after all —
+      // exact field names match what was asked for (in minutes here,
+      // unlike /earnings's own active_seconds/idle_seconds).
+      activeMinutes: (j['active_minutes'] as num?)?.toInt(),
+      idleMinutes: (j['idle_minutes'] as num?)?.toInt(),
+      // CONFIRMED LIVE (2026-09-02): real field is profile_photo_url —
+      // different from every name previously guessed here. Old guesses
+      // kept as fallbacks in case a different endpoint ever uses them.
+      photoUrl: j['profile_photo_url'] ?? j['photo_url'] ?? j['photo'] ?? j['profile_photo'],
       // Not present in /me — left at defaults until GET /earnings is wired
       // into the profile refresh, or confirmed to live elsewhere.
       todayEarnings: 0.0,
       deliveriesToday: 0,
-      rating: 4.9,
     );
   }
 

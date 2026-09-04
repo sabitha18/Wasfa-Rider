@@ -147,19 +147,11 @@ class _EarningsScreenState extends State<EarningsScreen> {
       if (mounted) setState(() => _now = DateTime.now());
     });
     _fetchPeriodData('today'); // now fetched immediately too, so Today's chart is real from the start
-    // CLIENT-REQUESTED (2026-09-01): completed/failed delivery stats
-    // used to read from the shared _orders list, back when that was
-    // sourced from tab=all. Now that _orders is active-only (see
-    // OrdersViewModel.load()), this screen fetches its own data
-    // directly instead. Uses tab=all specifically, not tab=done —
-    // confirmed live earlier in this project that tab=all can return
-    // MORE orders than tab=active+tab=done combined (6 vs 3 in that
-    // test), meaning some orders — likely failed ones — exist in
-    // neither individually. tab=all is the only source confirmed to
-    // include everything.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<OrdersViewModel>().loadTab('all');
-    });
+    // CLIENT-REQUESTED (2026-09-02): the tab=all fetch + client-side
+    // counting this used to do is gone — done_count/failed_count/
+    // total_km are now expected to come directly from /earnings itself
+    // (the exact field names given to Soumya), same as period_total/
+    // period_count already do. See the fields read below in build().
   }
 
   @override
@@ -171,44 +163,50 @@ class _EarningsScreenState extends State<EarningsScreen> {
   @override
   Widget build(BuildContext context) {
     final appVM    = context.watch<AppViewModel>();
-    final ordersVM = context.watch<OrdersViewModel>();
     final driver   = appVM.driver;
     final earnings = driver?.todayEarnings ?? 0.0;
     final onShift  = driver?.onShift ?? false;
 
-    // CLIENT-REQUESTED (2026-09-01): reads from the dedicated tab=all
-    // fetch now (see initState above) — not tab=done, since tab=done
-    // isn't confirmed to include failed orders (see initState's own
-    // note on this), and not the shared _orders list, since that's
-    // active-only now and would always show 0 here otherwise.
-    final allOrders = ordersVM.ordersForTab('all');
-    final done   = allOrders.where((o) => o.status == OrderStatus.done).toList();
-    final failed = allOrders.where((o) => o.status == OrderStatus.failed).length;
-    final totalKm = done.fold(0.0, (s, o) => s + o.distanceKm);
+    // CLIENT-REQUESTED (2026-09-02): previously fetched tab=all
+    // separately and counted done/failed/km client-side, since
+    // /earnings didn't have these. Now reads them directly — the exact
+    // field names given to Soumya (done_count/failed_count/total_km),
+    // period-scoped the same way period_total/period_count already are.
+    // Genuinely better than the old approach too, not just cleaner: the
+    // old client-side counting only ever worked for "Today" (tab=all
+    // only has recent orders) — these being real period-scoped API
+    // fields means Week/Month will show real numbers too, once added,
+    // instead of always "—".
+    final displayDeliveries = (_periodData?['done_count'] as num?)?.toInt()
+        ?? (_periodData?['period_count'] as num?)?.toInt() ?? _rows.length;
+    final int? displayFailed = (_periodData?['failed_count'] as num?)?.toInt();
+    final double? displayKm = (_periodData?['total_km'] as num?)?.toDouble();
+    // CONFIRMED LIVE (2026-09-02): both /me and /earnings now include
+    // rating/active/idle — but /me's are the right source for THIS
+    // section specifically. active_minutes/idle_minutes/rating on /me
+    // are shift/profile-level (not tied to any period), matching what
+    // "Shift Time Today"/"Work & Hours" actually represents — the
+    // CURRENT ongoing shift, regardless of which period tab (Today/
+    // Week/Month) happens to be selected. /earnings's own active_seconds/
+    // idle_seconds are period-scoped instead, which would make these
+    // numbers incorrectly jump around when switching period tabs, even
+    // though this section has nothing to do with the period selector at
+    // all. Reads driver.* (from /me) instead of _periodData (/earnings).
+    final displayRating = driver?.rating;
+    final displayActiveMin = driver?.activeMinutes;
+    final displayIdleMin = driver?.idleMinutes;
 
     final isToday = _period == 'today';
     // CLIENT-REPORTED (2026-08-13): "Today" showed 0.000 while the API's
     // own period_total said 0.260 for the same day. Root cause: `earnings`
     // above (driver.todayEarnings) is PURELY local — DriverProfile.fromJson
     // hardcodes it to 0.0 on every fetch, and the only thing that ever
-    // increments it is addEarnings() right after a delivery completes
-    // in THIS session. Restart the app mid-shift, or complete a delivery
-    // any other way, and it silently resets/never counts it — even
-    // though backend's /earnings correctly tracks it regardless. Taking
-    // the higher of the two: never regresses to a stale local 0 when the
-    // API has real data, but still reflects a just-completed delivery
-    // instantly without waiting for the next fetch.
+    // incremented it (addEarnings, right after a delivery) was removed
+    // entirely — see main.dart's own note on why. `earnings` above is
+    // therefore now always 0.0, meaning this always resolves to
+    // _periodTotal, the real API value — kept as-is since it's already
+    // correct now, not because it's still doing anything meaningful.
     final displayEarnings = isToday ? (earnings > _periodTotal ? earnings : _periodTotal) : _periodTotal;
-    // CONFIRMED (2026-08-13): response also includes period_count —
-    // backend's own count for the period, more reliable than rows.length
-    // if rows is ever paginated/capped. 'today' still uses the trusted
-    // live view-model count, same reasoning as displayEarnings above.
-    final displayDeliveries = isToday ? done.length : ((_periodData?['period_count'] as num?)?.toInt() ?? _rows.length);
-    // Failed-delivery count and total distance simply aren't present
-    // anywhere in this endpoint's response — rather than show a fake or
-    // wrong number for Week/Month, these stay null and render as "—".
-    final int? displayFailed = isToday ? failed : null;
-    final double? displayKm = isToday ? totalKm : null;
     final bars = _buildBars();
 
     // Was previously a hardcoded fake offset (now - 4h22m, always the same
@@ -218,12 +216,10 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final elapsedMin = _now.difference(shiftStart).inMinutes.clamp(0, 9999);
     final hh = elapsedMin ~/ 60;
     final mm = elapsedMin % 60;
-    // Active/Idle split still has no real backend source — no endpoint
-    // tracks minute-by-minute activity — so idleMin stays a placeholder.
-    // Flagging this distinctly from the now-real elapsed/shift-start time
-    // rather than silently leaving it looking equally legitimate.
-    const idleMin = 38; // TODO: fake — no backend data source exists for this yet
-    final earningPerHour = elapsedMin > 0 ? (earnings / (elapsedMin / 60)) : 0.0;
+    // CONFIRMED LIVE (2026-09-02): earnings_per_hour now comes directly
+    // from /earnings — replaces the previous client-side
+    // earnings/(elapsedMin/60) calculation entirely.
+    final displayEarningsPerHour = (_periodData?['earnings_per_hour'] as num?)?.toDouble();
 
     final h = shiftStart.hour > 12 ? shiftStart.hour - 12
         : (shiftStart.hour == 0 ? 12 : shiftStart.hour);
@@ -432,7 +428,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   _StatBox(v: '$displayDeliveries', k: context.tr('deliveriesStatLabel')),
                   _StatBox(v: displayFailed != null ? '$displayFailed' : '—', k: context.tr('failedStatLabel')),
                   _StatBox(v: displayKm != null ? '${displayKm.toStringAsFixed(1)} km' : '—', k: context.tr('distanceStatLabel')),
-                  _StatBox(v: '⭐ 4.8', k: context.tr('ratingStatLabel')),
+                  // CONFIRMED LIVE (2026-09-02): comes from /earnings
+                  // itself, not driver/me as originally guessed.
+                  _StatBox(v: displayRating != null ? '⭐ ${displayRating.toStringAsFixed(1)}' : '—', k: context.tr('ratingStatLabel')),
                 ],
               ),
               const SizedBox(height: 20),
@@ -485,9 +483,18 @@ class _EarningsScreenState extends State<EarningsScreen> {
                     crossAxisSpacing: 8, mainAxisSpacing: 8,
                     childAspectRatio: 1.5,
                     children: [
-                      _StatBox(v: '${elapsedMin - idleMin}m', k: context.tr('active')),
-                      _StatBox(v: '38m', k: context.tr('idleStatLabel')),
-                      _StatBox(v: earningPerHour.toStringAsFixed(2), k: context.tr('kdPerHourLabel')),
+                      // CONFIRMED LIVE (2026-09-02): active_seconds/
+                      // idle_seconds on /earnings (not minutes on /me
+                      // as originally guessed) — converted to minutes
+                      // for display above (displayActiveMin/
+                      // displayIdleMin).
+                      _StatBox(v: displayActiveMin != null ? '${displayActiveMin}m' : '—', k: context.tr('active')),
+                      _StatBox(v: displayIdleMin != null ? '${displayIdleMin}m' : '—', k: context.tr('idleStatLabel')),
+                      // CONFIRMED LIVE (2026-09-02): earnings_per_hour
+                      // now comes directly from /earnings — reads it
+                      // instead of the previous client-side
+                      // earnings/(elapsedMin/60) calculation.
+                      _StatBox(v: displayEarningsPerHour != null ? displayEarningsPerHour.toStringAsFixed(2) : '—', k: context.tr('kdPerHourLabel')),
                     ],
                   ),
                   const SizedBox(height: 12),

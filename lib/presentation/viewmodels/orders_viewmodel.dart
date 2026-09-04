@@ -556,7 +556,15 @@ class OrdersViewModel extends ChangeNotifier {
   /// endpoint needs a real proof-of-delivery photo. [payMethod] is still
   /// sent too (kept optional server-side per the same endpoint's ambiguity
   /// — see OrderRepository.finish).
-  Future<void> markDelivered(
+  /// CLIENT-REQUESTED (2026-09-02): now returns the real commission
+  /// earned on this delivery (from /finish's own response — see
+  /// OrderRepository.finish's own doc), or null if unavailable/failed.
+  /// Can't use the shared _guarded() helper here since it only supports
+  /// actions returning void, discarding exactly the value this needs to
+  /// return — so this replicates the same try/catch error-handling
+  /// pattern manually instead, kept isolated to this one method rather
+  /// than changing the shared helper's signature for every other caller.
+  Future<double?> markDelivered(
       String orderId, {
         required String podPhotoPath,
         String? payMethod,
@@ -564,15 +572,21 @@ class OrdersViewModel extends ChangeNotifier {
         String? signatureBase64,
       }) async {
     final o = findById(orderId);
-    if (o == null) return;
-    final ok = await _guarded(() => _repo.finish(
-      o.co ?? o.id,
-      podPhotoPath: podPhotoPath,
-      method: payMethod,
-      given: given,
-      signatureBase64: signatureBase64,
-    ));
-    if (!ok) return;
+    if (o == null) return null;
+    double? commission;
+    try {
+      commission = await _repo.finish(
+        o.co ?? o.id,
+        podPhotoPath: podPhotoPath,
+        method: payMethod,
+        given: given,
+        signatureBase64: signatureBase64,
+      );
+    } on ApiException catch (e) {
+      error = e.message;
+      notifyListeners();
+      return null;
+    }
     _updateOrder(orderId, o.copyWith(
       status: OrderStatus.done,
       driverState: DriverState.delivered,
@@ -582,6 +596,7 @@ class OrdersViewModel extends ChangeNotifier {
     if (next != null) {
       _updateOrder(next.id, next.copyWith(status: OrderStatus.active));
     }
+    return commission;
   }
 
   Future<void> markFailed(String orderId, String reason) async {

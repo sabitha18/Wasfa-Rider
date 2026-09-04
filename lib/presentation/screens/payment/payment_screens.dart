@@ -1087,12 +1087,12 @@ class SuccessScreen extends StatefulWidget {
     super.key,
     required this.order,
     this.nextOrder,
-    required this.earningsBump,
+    this.earningsBump,
     required this.onContinue,
   });
   final Order order;
   final Order? nextOrder;
-  final double earningsBump;
+  final double? earningsBump;
   final VoidCallback onContinue;
 
   @override
@@ -1186,26 +1186,35 @@ class _SuccessScreenState extends State<SuccessScreen>
                 child: next != null ? _buildNextCard(next) : _buildAllDone(),
               ),
               const SizedBox(height: 16),
-              // Earnings bump
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white.withOpacity(0.20)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(context.tr('earningsBump'), style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 12)),
-                      Text('+${widget.earningsBump.toStringAsFixed(3)} ${context.tr('kd')}',
-                          style: GoogleFonts.dmSans(color: const Color(0xFFB7F5CE), fontSize: 14, fontWeight: FontWeight.w800)),
-                    ],
+              // CLIENT-REPORTED (2026-09-02): this was previously
+              // ALWAYS shown, with the amount calculated as order total
+              // x a hardcoded 15% — completely fabricated, no connection
+              // to the real, admin-configured commission rule at all.
+              // Now hidden entirely unless a real per-delivery commission
+              // value is actually available — see the /finish response
+              // field flagged separately for Soumya, since showing
+              // nothing is more honest than showing a made-up number in
+              // what's meant to be a genuine "you earned this" moment.
+              if (widget.earningsBump != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.white.withOpacity(0.20)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(context.tr('earningsBump'), style: GoogleFonts.dmSans(color: Colors.white.withOpacity(0.85), fontSize: 12)),
+                        Text('+${widget.earningsBump!.toStringAsFixed(3)} ${context.tr('kd')}',
+                            style: GoogleFonts.dmSans(color: const Color(0xFFB7F5CE), fontSize: 14, fontWeight: FontWeight.w800)),
+                      ],
+                    ),
                   ),
                 ),
-              ),
               const Spacer(),
               // Swipe to continue
               Padding(
