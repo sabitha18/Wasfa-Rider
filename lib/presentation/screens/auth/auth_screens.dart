@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -279,10 +280,53 @@ class _OtpScreenState extends State<OtpScreen> {
   final List<TextEditingController> _ctrls = List.generate(6, (_) => TextEditingController());
   final List<FocusNode> _nodes = List.generate(6, (_) => FocusNode());
   bool _complete = false;
+  bool _resendEnabled = false;
+  int _resendSeconds = 60;
+  Timer? _resendTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _startResendCountdown();
+  }
 
   void _checkComplete() {
     final complete = _ctrls.every((c) => c.text.isNotEmpty);
     if (complete != _complete) setState(() => _complete = complete);
+  }
+
+  void _startResendCountdown() {
+    _resendTimer?.cancel();
+    setState(() {
+      _resendEnabled = false;
+      _resendSeconds = 60;
+    });
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_resendSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _resendSeconds = 0;
+          _resendEnabled = true;
+        });
+      } else {
+        setState(() => _resendSeconds--);
+      }
+    });
+  }
+
+  void _handleResend() {
+    if (!_resendEnabled) return;
+    context.read<AppViewModel>().requestOtp(widget.phone);
+    _startResendCountdown();
+  }
+
+  @override
+  void dispose() {
+    _resendTimer?.cancel();
+    for (final c in _ctrls) c.dispose();
+    for (final n in _nodes) n.dispose();
+    super.dispose();
   }
 
   @override
@@ -402,8 +446,12 @@ class _OtpScreenState extends State<OtpScreen> {
                 ),
               const Spacer(),
               Center(child: TextButton(
-                onPressed: () => context.read<AppViewModel>().requestOtp(widget.phone),
-                child: Text(s.get('resend'), style: GoogleFonts.dmSans(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                onPressed: _resendEnabled ? _handleResend : null,
+                child: Text(
+                    _resendEnabled ? s.get('resend') : '${s.get('resend')} (${_resendSeconds}s)',
+                    style: GoogleFonts.dmSans(
+                        color: _resendEnabled ? Colors.white : Colors.white.withOpacity(0.4),
+                        fontSize: 13, fontWeight: FontWeight.w700)),
               )),
               const SizedBox(height: 6),
               SizedBox(

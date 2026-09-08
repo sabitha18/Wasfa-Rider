@@ -120,7 +120,7 @@ class ApiClient {
 
   String _messageFor(DioException e) {
     final serverMsg = e.response?.data is Map
-        ? (e.response?.data['message'] ?? e.response?.data['error'])
+        ? (e.response?.data['message'] ?? e.response?.data['error'] ?? e.response?.data['msg'])
         : null;
     if (serverMsg is String) return serverMsg;
     switch (e.type) {

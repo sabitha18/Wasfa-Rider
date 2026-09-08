@@ -38,7 +38,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Order? _addrOrder;
 
   // ── Date filter state ──
-  String _dateFilter = 'today'; // 'today', 'yesterday', 'week', 'all', 'custom'
+  String _dateFilter = 'all'; // 'today', 'yesterday', 'week', 'all', 'custom'
   DateTime? _customDate;
 
   // CLIENT-REQUESTED (2026-08-31): "for active use active api, for all
@@ -493,10 +493,10 @@ class _DateFilterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final options = [
+      ('all', context.tr('all')),
       ('today', context.tr('todayFilter')),
       ('yesterday', context.tr('yesterday')),
       ('week', context.tr('thisWeek')),
-      ('all', context.tr('all')),
     ];
 
     return SingleChildScrollView(
