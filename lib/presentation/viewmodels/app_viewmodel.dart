@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/network/api_client.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/auth_repository.dart';
@@ -30,13 +31,40 @@ class AppViewModel extends ChangeNotifier {
   DriverProfile? get driver => _driver;
   bool get isRTL => _language == 'ar';
 
+  static const _languagePrefsKey = 'wasfa_rider_language';
+
   /// Call once at app start to restore a session if a token is stored.
   Future<void> restoreSession() async {
+    // CLIENT-REPORTED (2026-09-09): switching to Arabic and closing/
+    // reopening the app reverted to English. Root cause: the driver's
+    // language choice was NEVER saved on the device at all — only kept
+    // in memory, plus a best-effort sync to backend. On restart, the
+    // app relied entirely on re-fetching /me and reading driver.language
+    // back from THAT response — so if the sync call to backend ever
+    // failed for any reason (network hiccup, endpoint issue), the choice
+    // was lost the moment the app restarted, with no local fallback at
+    // all. Now reads a real, on-device saved value first — instant,
+    // network-independent, and always respected regardless of whether
+    // the backend sync succeeded.
+    final prefs = await SharedPreferences.getInstance();
+    final savedLanguage = prefs.getString(_languagePrefsKey);
+    if (savedLanguage != null) {
+      _language = savedLanguage;
+      notifyListeners();
+    }
     if (await _authRepo.isLoggedIn) {
       try {
         _driver = await _authRepo.fetchMe();
         _isLoggedIn = true;
-        if (_driver?.language != null) _language = _driver!.language!;
+        // Only fall back to backend's own value when this device has
+        // never saved a choice locally at all (e.g. first-ever login on
+        // a fresh install) — a locally-saved choice always wins once it
+        // exists, since it reflects this device's most recent, explicit
+        // choice, not whatever backend's copy happens to be.
+        if (savedLanguage == null && _driver?.language != null) {
+          _language = _driver!.language!;
+          await prefs.setString(_languagePrefsKey, _language);
+        }
       } catch (_) {
         // Couldn't confirm the session (invalid/expired token, OR no
         // network — a DNS/connection failure throws the same ApiException
@@ -55,6 +83,11 @@ class AppViewModel extends ChangeNotifier {
   Future<void> setLanguage(String lang) async {
     _language = lang;
     notifyListeners();
+    // CLIENT-REPORTED (2026-09-09): saved locally first and immediately —
+    // this is now the real fix for the language-reverting bug. Doesn't
+    // wait for or depend on the backend sync below succeeding at all.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_languagePrefsKey, lang);
     // /language requires a bearer token (401 otherwise) — only sync once
     // logged in. Pre-login language choice stays local-only, which matches
     // the current UI flow (language picker is the very first screen).
@@ -63,6 +96,9 @@ class AppViewModel extends ChangeNotifier {
       await _orderRepo.setLanguage(lang);
     } on ApiException {
       // Non-critical — keep the local change even if the sync call fails.
+      // No longer risks losing the choice on restart either way, now
+      // that it's already saved on-device above regardless of this
+      // call's outcome.
     }
   }
 
