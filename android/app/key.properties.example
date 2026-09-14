@@ -1,0 +1,16 @@
+# Copy this file to "key.properties" (same folder) and fill in real values.
+# key.properties is already listed in android/.gitignore — never commit it
+# or the .jks/.keystore file it points to.
+#
+# 1) Generate a release keystore ONCE, keep it somewhere safe and backed up
+#    (losing it means you can never update this app under this listing
+#    again unless you're enrolled in Play App Signing):
+#
+#      keytool -genkey -v -keystore rider-release.jks -keyalg RSA \
+#        -keysize 2048 -validity 10000 -alias wasfa_rider
+#
+# 2) Fill these in:
+storePassword=REPLACE_ME
+keyPassword=REPLACE_ME
+keyAlias=wasfa_rider
+storeFile=/absolute/or/relative/path/to/rider-release.jks

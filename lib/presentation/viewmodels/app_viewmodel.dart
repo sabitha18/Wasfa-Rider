@@ -116,8 +116,12 @@ class AppViewModel extends ChangeNotifier {
         error = 'This number isn\'t registered as a driver yet. Ask an admin to add it in the admin panel first.';
         return false;
       }
-      if (res.devCode != null) {
-        devOtpHint = res.devCode; // dev/sandbox environments send the real OTP back directly
+      if (res.devCode != null && kDebugMode) {
+        // Client-side belt-and-suspenders: even if the backend host this
+        // build points at ever returns a non-null dev_code (sandbox env,
+        // misconfig, wrong base URL), a release build must never surface
+        // a driver's real OTP on-screen. Only ever shown in debug builds.
+        devOtpHint = res.devCode;
       }
       return true;
     } on ApiException catch (e) {

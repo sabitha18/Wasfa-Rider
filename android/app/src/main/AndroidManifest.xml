@@ -18,7 +18,7 @@
         <!-- Google Maps API Key — replace with your key from Google Cloud Console -->
         <!-- Required: Enable Maps SDK for Android + Directions API -->
         <meta-data android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyCwasrWlCcRar6hb9WidlEKIU9ye62pBjg"/>
+            android:value="AIzaSyD76M68gZaJaM8FwgloNUP6R9hr4QGfa-8"/>
 
         <activity
             android:name=".MainActivity"

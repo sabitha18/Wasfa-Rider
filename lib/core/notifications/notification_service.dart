@@ -135,7 +135,9 @@ class NotificationService {
       final token = await _fcm.getToken();
       if (token != null) {
         await _authRepo.registerFcmToken(token);
-        debugPrint('[Push] FCM token registered with backend: $token');
+        // Token value itself intentionally not logged — it's a per-device
+        // credential and shouldn't sit in release logcat output.
+        debugPrint('[Push] FCM token registered with backend (${token.length} chars)');
       }
     } catch (e) {
       // Non-fatal — driver just won't get pushes until this succeeds on a

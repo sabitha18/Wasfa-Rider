@@ -26,7 +26,7 @@ class AppRoutes {
 
 /// Google Maps API key — replace with your key from Google Cloud Console.
 /// Enable: Maps SDK for Android/iOS + Directions API
-const String kGoogleMapsApiKey = 'AIzaSyCwasrWlCcRar6hb9WidlEKIU9ye62pBjg';
+const String kGoogleMapsApiKey = 'AIzaSyD76M68gZaJaM8FwgloNUP6R9hr4QGfa-8'; // Android-only key, restricted to kw.wasfa.rider + release SHA-1
 
 /// App-level misc
 const String kAppName = 'WASFA Rider';

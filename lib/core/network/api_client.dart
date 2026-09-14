@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'api_config.dart';
 
@@ -69,14 +70,18 @@ class ApiClient {
       },
     ));
 
-    // Prints every request/response/error. Remove or wrap in
-    // `if (kDebugMode)` before shipping a release build.
-    _dio.interceptors.add(LogInterceptor(
-      requestBody: true,
-      responseBody: true,
-      requestHeader: false,
-      responseHeader: false,
-    ));
+    // Every request/response body — OTP codes, civil ID, IBAN, cash
+    // amounts, base64 signatures, all of it — went to logcat on every
+    // build, release included. Debug/profile only now; a release build
+    // never adds this interceptor at all.
+    if (kDebugMode) {
+      _dio.interceptors.add(LogInterceptor(
+        requestBody: true,
+        responseBody: true,
+        requestHeader: false,
+        responseHeader: false,
+      ));
+    }
   }
 
   static final ApiClient instance = ApiClient._internal();

@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 import 'firebase_options.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -25,6 +28,16 @@ import 'presentation/widgets/shared_widgets.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kReleaseMode) {
+    // ~40 debugPrint() calls across viewmodels/repositories/screens dump
+    // raw API responses for logcat-filtered debugging during development
+    // (see the [Tag] convention throughout this codebase) — several of
+    // those raw dumps include order/customer/payment data. One override
+    // here silences all of them in a shipped build without touching each
+    // call site, while leaving every one of them intact for debug/profile
+    // builds where they're actually useful.
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(
     MultiProvider(
@@ -185,14 +198,88 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       // which visibly stalled the UI when triggered many times in quick
       // succession. Started once here for the whole app session instead;
       // only stops on logout (see the logout button below).
-      context.read<MapViewModel>().startTracking();
-      NotificationService.instance.init(); // requests permission + registers FCM token with backend
+      // Location and notifications are the two runtime-permission prompts
+      // this app fires. Play policy's "in-context permission requests"
+      // guidance wants a plain-language reason shown before the OS dialog,
+      // not just a blank system prompt — see _requestPermissionsInOrder.
+      // Run sequentially (not in parallel) so the two rationale dialogs,
+      // if both are needed, never stack on top of each other.
+      unawaited(_requestPermissionsInOrder());
       _pushRefreshSub = NotificationService.instance.onNewOrderPush.listen((_) {
         if (mounted) context.read<OrdersViewModel>().refresh(silent: true);
       });
       _orderTapSub = NotificationService.instance.onOrderTapped.listen(_handleOrderNotificationTap);
-      NotificationService.instance.checkInitialMessage(); // was this app launch caused by tapping a push while fully closed?
     });
+  }
+
+  Future<void> _requestPermissionsInOrder() async {
+    await _ensureLocationPermissionWithRationale();
+    if (!mounted) return;
+    await _ensureNotificationPermissionWithRationale();
+  }
+
+  /// Shows a one-time, plain-language explanation right before the native
+  /// location prompt — but only when the OS hasn't already recorded a
+  /// decision (granted/denied/permanently-denied). `checkPermission()` is
+  /// a pure status read with no UI side effect, so this never risks
+  /// double-prompting.
+  Future<void> _ensureLocationPermissionWithRationale() async {
+    if (!MapViewModel.kDebugFakeDriverLocation) {
+      final status = await Geolocator.checkPermission();
+      if (status == LocationPermission.denied && mounted) {
+        await _showPermissionRationale(
+          icon: Icons.location_on_outlined,
+          title: 'Location access',
+          message: "WASFA Rider uses your location to route you to pickups "
+              "and drop-offs, and to keep your live position accurate while "
+              "you're on shift. It's only used while the app is open.",
+        );
+      }
+    }
+    if (!mounted) return;
+    await context.read<MapViewModel>().startTracking();
+  }
+
+  /// Same pattern for notifications — only shown pre-decision
+  /// (`notDetermined`), never re-shown after the driver has already
+  /// answered the system prompt once.
+  Future<void> _ensureNotificationPermissionWithRationale() async {
+    final settings = await FirebaseMessaging.instance.getNotificationSettings();
+    if (settings.authorizationStatus == AuthorizationStatus.notDetermined && mounted) {
+      await _showPermissionRationale(
+        icon: Icons.notifications_none,
+        title: 'Stay updated',
+        message: "Turn on notifications so WASFA Rider can alert you the "
+            "instant a new order or batch is assigned to you — no need to "
+            "keep the app open and watching.",
+      );
+    }
+    if (!mounted) return;
+    await NotificationService.instance.init(); // requests permission + registers FCM token with backend
+    if (!mounted) return;
+    await NotificationService.instance.checkInitialMessage(); // was this app launch caused by tapping a push while fully closed?
+  }
+
+  Future<void> _showPermissionRationale({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(icon, color: WTheme.navy, size: 32),
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// A push notification for a specific order was tapped (foreground,
