@@ -31,11 +31,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>WASFA Rider uses your camera to capture proof-of-delivery photos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>WASFA Rider uses background location to track your delivery route.</string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string>WASFA Rider uses background location to track your delivery route.</string>
+	<string>WASFA Rider needs your location to navigate to pickups and deliveries.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>WASFA Rider needs your location to navigate to pickups and deliveries.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>WASFA Rider needs access to your photo library to choose a profile photo or a delivery photo from your gallery.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>
