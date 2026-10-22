@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'api_config.dart';
@@ -24,6 +26,7 @@ class ApiClient {
       receiveTimeout: const Duration(seconds: 15),
       headers: {'Accept': 'application/json'},
     ));
+    _dio.httpClientAdapter = _newAdapter();
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
@@ -51,19 +54,46 @@ class ApiClient {
         // works. Retry once, transparently, specifically for this class
         // of error — this fixes the actual mechanism, rather than just
         // hiding the symptom from the user after the fact.
+        // CLIENT-REPORTED (2026-10-22) follow-up: drivers still hit
+        // "Could not reach the server" and only an app restart cleared it.
+        // The single instant retry above went through the SAME Dart
+        // HttpClient, whose pooled sockets were already dead after a
+        // network switch (Wi-Fi <-> 4G, tower handover, screen-off idle),
+        // so the retry failed too and the app stayed stuck. An app restart
+        // works only because it creates a brand-new HttpClient — so now we
+        // do exactly that in code: throw away the old client, wait briefly
+        // for the radio to settle, and retry on a fresh one (up to
+        // _maxConnRetries times).
         final isConnectionError = error.type == DioExceptionType.connectionError;
-        final alreadyRetried = error.requestOptions.extra['retriedAfterConnectionError'] == true;
-        if (isConnectionError && !alreadyRetried) {
-          try {
-            final retryOptions = error.requestOptions;
-            retryOptions.extra['retriedAfterConnectionError'] = true;
-            final response = await _dio.fetch(retryOptions);
-            handler.resolve(response);
-            return;
-          } catch (_) {
-            // The retry itself failed too — this is no longer just a
-            // stale-connection blip, so fall through and let the
-            // original error propagate normally.
+        final isRetryAttempt = error.requestOptions.extra[_retryFlag] == true;
+        if (isConnectionError && !isRetryAttempt) {
+          for (var attempt = 1; attempt <= _maxConnRetries; attempt++) {
+            resetConnection(reason: 'connectionError on '
+                '${error.requestOptions.method} ${error.requestOptions.path} (retry $attempt/$_maxConnRetries)');
+            await Future.delayed(Duration(milliseconds: 800 * attempt));
+            try {
+              final retryOptions = error.requestOptions;
+              retryOptions.extra[_retryFlag] = true;
+              // A FormData body can only be sent once — clone it so
+              // multipart uploads (POD photo, building photos) can retry.
+              if (retryOptions.data is FormData) {
+                retryOptions.data = (retryOptions.data as FormData).clone();
+              }
+              final response = await _dio.fetch(retryOptions);
+              debugPrint('[ApiClient] retry $attempt succeeded for ${retryOptions.method} ${retryOptions.path}');
+              handler.resolve(response);
+              return;
+            } on DioException catch (e) {
+              if (e.type != DioExceptionType.connectionError) {
+                // Reached the server this time but got a real error back
+                // (e.g. 422) — pass THAT on, not the stale connection error.
+                handler.next(e);
+                return;
+              }
+              debugPrint('[ApiClient] retry $attempt failed: ${e.error ?? e.message}');
+            } catch (e) {
+              debugPrint('[ApiClient] retry $attempt failed: $e');
+            }
           }
         }
         handler.next(error);
@@ -86,6 +116,40 @@ class ApiClient {
 
   static final ApiClient instance = ApiClient._internal();
   late final Dio _dio;
+
+  static const _retryFlag = 'retriedAfterConnectionError';
+  static const _maxConnRetries = 2;
+  DateTime? _lastReset;
+
+  /// Fresh Dart HttpClient. idleTimeout is 5s (Dart default is 15s) so
+  /// idle keep-alive sockets are closed by us before a carrier/NAT can
+  /// silently kill them while the driver is idle or the screen is off.
+  IOHttpClientAdapter _newAdapter() => IOHttpClientAdapter(
+        createHttpClient: () {
+          final client = HttpClient();
+          client.idleTimeout = const Duration(seconds: 5);
+          client.connectionTimeout = const Duration(seconds: 15);
+          return client;
+        },
+      );
+
+  /// Drops every pooled connection and installs a brand-new HttpClient —
+  /// the same thing an app restart does, without the restart. Called on
+  /// a connection error (before retrying) and when the app resumes from
+  /// background. Debounced: several requests failing at the same moment
+  /// (orders poll + batch poll) only trigger one reset, so a request
+  /// already running on the new client is never killed by a second reset.
+  void resetConnection({String reason = ''}) {
+    final now = DateTime.now();
+    if (_lastReset != null && now.difference(_lastReset!) < const Duration(seconds: 2)) return;
+    _lastReset = now;
+    debugPrint('[ApiClient] resetting HTTP connection${reason.isEmpty ? '' : ' — $reason'}');
+    final old = _dio.httpClientAdapter;
+    _dio.httpClientAdapter = _newAdapter();
+    try {
+      old.close(force: true);
+    } catch (_) {}
+  }
   final _storage = const FlutterSecureStorage();
   static const _tokenKey = 'wasfa_rider_auth_token';
 
@@ -119,6 +183,11 @@ class ApiClient {
       // Some backends wrap arrays at top level — normalize to a map.
       return {'data': data};
     } on DioException catch (e) {
+      // Real underlying cause (SocketException / failed host lookup /
+      // handshake etc.) so logcat shows WHY, not just the friendly text.
+      // No request/response bodies here — safe for release builds.
+      debugPrint('[ApiClient] ${e.type.name} ${e.requestOptions.method} ${e.requestOptions.path} '
+          '(${e.response?.statusCode ?? 'no response'}): ${e.error ?? e.message}');
       throw ApiException(_messageFor(e), statusCode: e.response?.statusCode);
     }
   }

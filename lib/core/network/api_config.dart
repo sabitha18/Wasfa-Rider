@@ -14,7 +14,16 @@ class ApiConfig {
   ApiConfig._();
 
   //static const String baseUrl = 'https://portal.apixservices.com/api/driver';
-  static const String baseUrl = 'https://apixrx.com/api/driver';
+  //static const String baseUrl = 'https://apixrx.com/api/driver';
+  // CLIENT-CONFIRMED (2026-10-22): backend moved to wasfakw.com.
+  static const String baseUrl = 'https://wasfakw.com/api/driver';
+
+  // ── App version (force / optional update) ─────────────────────
+  // GET, no auth. Same shape as the Customer app's /api/v1/app/version:
+  // { android: {min_version, latest_version, store_url, message, message_ar},
+  //   ios: {...} } — set in the admin panel. Requested from backend
+  // 2026-10-22; until it's live the 404 just means "no update" (app runs normally).
+  static const String appVersion = '/app/version';
 
   // ── Auth ──────────────────────────────────────────────────────
   static const String login       = '/login';        // POST {email, password, fcm_token}

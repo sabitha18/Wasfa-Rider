@@ -7,8 +7,10 @@ import 'firebase_options.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/constants/app_constants.dart';
+import 'core/network/api_client.dart';
 import 'core/notifications/notification_service.dart';
 import 'core/theme/app_theme.dart';
+import 'data/services/app_version_service.dart';
 import 'data/models/models.dart';
 import 'data/repositories/order_repository.dart';
 import 'presentation/viewmodels/app_viewmodel.dart';
@@ -24,6 +26,7 @@ import 'presentation/screens/payment/payment_screens.dart';
 import 'presentation/screens/batch/batch_screens.dart';
 import 'presentation/screens/profile/profile_screens.dart';
 import 'presentation/screens/earnings/earnings_screen.dart';
+import 'presentation/screens/update/update_required_screen.dart';
 import 'presentation/widgets/shared_widgets.dart';
 
 void main() async {
@@ -101,8 +104,14 @@ class RiderShell extends StatefulWidget {
 }
 
 class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
-  // Phase: 'splash' | 'language' | 'login' | 'otp' | 'vehicle' | 'app'
+  // Phase: 'splash' | 'language' | 'login' | 'otp' | 'vehicle' | 'app' | 'update'
   String _phase = 'splash';
+  // FORCE UPDATE (2026-10-22) — same approach as the Customer app.
+  // Set when GET /app/version says the installed version is below
+  // min_version; _phase then becomes 'update' and nothing else is reachable.
+  UpdateCheckResult? _forceUpdate;
+  bool _optionalUpdateShown = false; // optional prompt: once per launch
+  DateTime? _lastVersionCheck;
   // Active screen within 'app'
   String _tab   = 'home';  // home | orders | profile
   String _screen = 'home'; // any sub-screen
@@ -319,6 +328,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     // the login flow for a driver who's already signed in.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final appVM = context.read<AppViewModel>();
+      // Version gate (GET /app/version) — started now so it runs in
+      // parallel with session restore instead of adding to it. Never
+      // throws; any failure (incl. endpoint not live yet) = "no update".
+      _lastVersionCheck = DateTime.now();
+      final updateCheck = AppVersionService.instance.check();
       try {
         await appVM.sessionRestoreFuture;
       } catch (_) {
@@ -326,7 +340,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         // splash screen forever — fall through to the language/login flow.
       }
       if (!mounted) return;
+      final update = await updateCheck;
+      if (!mounted) return;
+      if (update.type == UpdateType.force) {
+        // Below min_version: block the app entirely, no shift-on, no polling.
+        setState(() { _forceUpdate = update; _phase = 'update'; });
+        return;
+      }
       setState(() => _phase = appVM.isLoggedIn ? 'app' : 'language');
+      if (update.type == UpdateType.optional) {
+        // Below latest_version: offer it once per launch, then carry on.
+        _optionalUpdateShown = true;
+        unawaited(showOptionalUpdateDialog(context, update, appVM.isRTL));
+      }
       // CLIENT-REQUESTED: auto-on shift when the app opens. This covers
       // the actual cold-start case — didChangeAppLifecycleState below
       // only fires on lifecycle CHANGES, so it never sees the app's very
@@ -365,12 +391,53 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
+        // CLIENT-REPORTED (2026-10-22): "Could not reach the server" that
+        // only an app restart fixed. Sockets pooled before going to the
+        // background are often dead by now (screen off, network switched)
+        // — start on a fresh HTTP client first, same as a restart would,
+        // then pull fresh orders quietly.
+        ApiClient.instance.resetConnection(reason: 'app resumed');
+        // Blocked by force update — stay off shift, nothing else to do.
+        if (_phase == 'update') return;
         unawaited(_appVM?.setShiftAuto(true));
+        if (mounted && (_appVM?.isLoggedIn ?? false)) {
+          unawaited(context.read<OrdersViewModel>().refresh(silent: true));
+        }
+        // Drivers keep the app open all day, so a launch-only check would
+        // rarely run — re-check on resume too (throttled: switching to
+        // Google Maps and back shouldn't call the API every time).
+        unawaited(_recheckVersionOnResume());
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         unawaited(_appVM?.setShiftAuto(false));
       default:
         break;
+    }
+  }
+
+  /// Re-runs the version check when the app comes back to the foreground,
+  /// at most once every 15 minutes. Force → lock the app (stop polling,
+  /// GPS and shift). Optional → prompt only if not already shown this launch.
+  Future<void> _recheckVersionOnResume() async {
+    final last = _lastVersionCheck;
+    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 15)) return;
+    _lastVersionCheck = DateTime.now();
+    final update = await AppVersionService.instance.check();
+    if (!mounted || _phase == 'update' || _phase == 'splash') return;
+    if (update.type == UpdateType.force) {
+      final ordersVM = context.read<OrdersViewModel>();
+      ordersVM.stopAutoRefresh();
+      ordersVM.stopBatchPolling();
+      context.read<MapViewModel>().stopTracking();
+      _ordersLoaded = false;
+      final appVM = context.read<AppViewModel>();
+      if (appVM.isLoggedIn) unawaited(appVM.setShiftAuto(false));
+      setState(() { _forceUpdate = update; _phase = 'update'; });
+      return;
+    }
+    if (update.type == UpdateType.optional && !_optionalUpdateShown) {
+      _optionalUpdateShown = true;
+      unawaited(showOptionalUpdateDialog(context, update, context.read<AppViewModel>().isRTL));
     }
   }
 
@@ -399,6 +466,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     // Auth flow
     if (_phase == 'splash') return const SplashScreen();
+    if (_phase == 'update' && _forceUpdate != null) {
+      return UpdateRequiredScreen(result: _forceUpdate!, isArabic: context.watch<AppViewModel>().isRTL);
+    }
     if (_phase == 'language') return LanguageScreen(onSelected: () => setState(() => _phase = 'login'));
     if (_phase == 'login')    return LoginScreen(onSubmit: (phone) async {
       final ok = await context.read<AppViewModel>().requestOtp(phone);

@@ -14,6 +14,10 @@ class OrdersViewModel extends ChangeNotifier {
   // silent forever: the driver needs to know the app has lost sync with
   // the server, not just keep working from stale data indefinitely.
   int _consecutiveSilentFailures = 0;
+  // CLIENT-REPORTED (2026-10-22): once past the 3-failure threshold, the
+  // red snackbar re-fired on EVERY 20s poll for as long as the outage
+  // lasted. Now shown once per outage; cleared by the next success.
+  bool _outageReported = false;
   // CLIENT-REPORTED (2026-08-22): tracks which multi-pharmacy orders
   // have already had a one-time detail-fetch backfill this session —
   // see load()'s use of this below. Prevents re-fetching the same
@@ -211,6 +215,7 @@ class OrdersViewModel extends ChangeNotifier {
       }
       _pendingBatch = await _repo.fetchPendingBatch();
       _consecutiveSilentFailures = 0; // any success clears the streak
+      _outageReported = false;
     } on ApiException catch (e) {
       if (silent) {
         _consecutiveSilentFailures++;
@@ -226,8 +231,11 @@ class OrdersViewModel extends ChangeNotifier {
         const maxSilentFailures = 3;
         if (_consecutiveSilentFailures >= maxSilentFailures) {
           debugPrint('[OrdersViewModel] load(silent) failed $_consecutiveSilentFailures times in a row — '
-              'no longer treating this as a brief blip, surfacing it: ${e.message}');
-          error = e.message;
+              'no longer treating this as a brief blip${_outageReported ? ' (already shown)' : ', surfacing it'}: ${e.message}');
+          if (!_outageReported) {
+            error = e.message;
+            _outageReported = true;
+          }
         } else {
           debugPrint('[OrdersViewModel] load(silent) failed quietly ($_consecutiveSilentFailures/$maxSilentFailures — '
               'expected occasionally, e.g. right after screen unlock): ${e.message}');
