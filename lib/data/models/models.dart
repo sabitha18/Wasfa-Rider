@@ -19,6 +19,14 @@ class OrderItem {
   // key names so this starts working the moment backend adds one, without
   // needing another round of client changes.
   final String? imageUrl;
+  // CLIENT-REQUESTED (2026-10-31): cancelled items — CONFIRMED live on
+  // /orders/{code} (APM40619): each item has `cancelled` (bool) and
+  // `cancelled_qty`. Fully cancelled = cancelledQty >= qty.
+  final bool cancelled;
+  final int cancelledQty;
+
+  bool get fullyCancelled => cancelled && cancelledQty >= qty;
+  bool get partlyCancelled => cancelled && cancelledQty > 0 && cancelledQty < qty;
 
   const OrderItem({
     required this.name,
@@ -28,6 +36,8 @@ class OrderItem {
     this.tag = 'Rx',
     this.pharmacy,
     this.imageUrl,
+    this.cancelled = false,
+    this.cancelledQty = 0,
   });
 
   // CONFIRMED shape (seen live): {name, quantity, price, tag, pharmacy}
@@ -42,6 +52,8 @@ class OrderItem {
     pharmacy: j['pharmacy'],
     color: _colorForTag(j['tag']),
     imageUrl: j['image_url'] ?? j['image'] ?? j['photo_url'] ?? j['photo'],
+    cancelled: j['cancelled'] == true || j['cancelled'] == 1 || j['cancelled'] == '1',
+    cancelledQty: int.tryParse('${j['cancelled_qty'] ?? 0}') ?? 0,
   );
 
   Map<String, dynamic> toJson() => {
@@ -50,6 +62,8 @@ class OrderItem {
     'quantity': qty,
     'tag': tag,
     'pharmacy': pharmacy,
+    'cancelled': cancelled,
+    'cancelled_qty': cancelledQty,
   };
 
   static Color _colorForTag(String? tag) {
@@ -365,6 +379,12 @@ class Order {
   final PayMethod payMethod;
   final double? discount;
   final double? deliveryFee;
+  // CLIENT-REQUESTED (2026-10-31): CONFIRMED live on /orders/{code} —
+  // `subtotal` (all items, before cancellation) and `cancelled_amount`.
+  // `total` is already the amount AFTER cancellation. Null when the
+  // endpoint doesn't send them (rows are then hidden, never calculated).
+  final double? subtotal;
+  final double? cancelledAmount;
   OrderStatus status;
   DriverState driverState;
   final double distanceKm;
@@ -420,6 +440,8 @@ class Order {
     required this.payMethod,
     this.discount,
     this.deliveryFee,
+    this.subtotal,
+    this.cancelledAmount,
     required this.status,
     required this.driverState,
     required this.distanceKm,
@@ -458,6 +480,7 @@ class Order {
       addr1: addr1, addr2: addr2, landmark: landmark, customerNote: customerNote,
       items: items, total: total, paid: paid, payMethod: payMethod,
       discount: discount, deliveryFee: deliveryFee,
+      subtotal: subtotal, cancelledAmount: cancelledAmount,
       status: status ?? this.status,
       driverState: driverState ?? this.driverState,
       distanceKm: distanceKm, etaMin: etaMin, pinPos: pinPos, pharmacies: pharmacies ?? this.pharmacies, mapLink: mapLink,
@@ -576,6 +599,8 @@ class Order {
       payMethod: _payMethodFrom(j['pay_method']),
       discount: (j['discount'] as num?)?.toDouble(),
       deliveryFee: (j['delivery_fee'] as num?)?.toDouble(),
+      subtotal: j['subtotal'] == null ? null : double.tryParse('${j['subtotal']}'),
+      cancelledAmount: j['cancelled_amount'] == null ? null : double.tryParse('${j['cancelled_amount']}'),
       status: _resolveStatus(j),
       driverState: _driverStateFrom(j['driver_state']),
       distanceKm: (j['distance_km'] as num? ?? 0).toDouble(),

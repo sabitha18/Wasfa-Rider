@@ -693,11 +693,16 @@ class _RichItemCardState extends State<_RichItemCard> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    return Container(
+    // CLIENT-REQUESTED (2026-10-31): cancelled items, as on the admin
+    // "All orders" page. Fully cancelled → greyed card, name + price
+    // struck through, red CANCELLED badge. Partly cancelled → normal
+    // card with a red "<cancelled_qty> CANCELLED" badge. All from API.
+    final full = item.fullyCancelled;
+    final card = Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: WTheme.cloud, width: 1.5)),
+      decoration: BoxDecoration(color: full ? WTheme.cloud.withOpacity(0.5) : Colors.white, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: full ? WTheme.err.withOpacity(0.35) : WTheme.cloud, width: 1.5)),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Color image box — tap to open lightbox
         GestureDetector(
@@ -742,11 +747,28 @@ class _RichItemCardState extends State<_RichItemCard> {
         ),
         const SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(item.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w700, color: WTheme.navy, fontSize: 13, height: 1.3)),
+          if (item.cancelled && item.cancelledQty > 0) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: WTheme.err, borderRadius: BorderRadius.circular(6)),
+              child: Text(
+                full
+                    ? context.tr('cancelled').toUpperCase()
+                    : '${item.cancelledQty} ${context.tr('cancelled').toUpperCase()}',
+                style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+              ),
+            ),
+          ],
+          Text(item.name, style: GoogleFonts.dmSans(fontWeight: FontWeight.w700,
+              color: full ? WTheme.muted : WTheme.navy, fontSize: 13, height: 1.3,
+              decoration: full ? TextDecoration.lineThrough : null, decorationColor: WTheme.err, decorationThickness: 2)),
           const SizedBox(height: 8),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             RichText(text: TextSpan(children: [
-              TextSpan(text: item.price.toStringAsFixed(3), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800, color: WTheme.rose, fontSize: 15)),
+              TextSpan(text: item.price.toStringAsFixed(3), style: GoogleFonts.dmSans(fontWeight: FontWeight.w800,
+                  color: full ? WTheme.muted : WTheme.rose, fontSize: 15,
+                  decoration: full ? TextDecoration.lineThrough : null, decorationColor: WTheme.err, decorationThickness: 2)),
               TextSpan(text: ' ${context.tr('kd')}', style: GoogleFonts.dmSans(fontSize: 10, color: WTheme.muted, fontWeight: FontWeight.w600)),
             ])),
             Container(
@@ -771,6 +793,7 @@ class _RichItemCardState extends State<_RichItemCard> {
         ])),
       ]),
     );
+    return full ? Opacity(opacity: 0.7, child: card) : card;
   }
 }
 
@@ -963,9 +986,15 @@ class _TotalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final delivery = order.deliveryFee ?? 1.500;
+    // CLIENT-REQUESTED (2026-10-31): every amount here comes from the API.
+    // Previously subtotal was calculated in-app (total - delivery +
+    // discount) with a hardcoded 1.500 delivery fallback — wrong once
+    // items are cancelled. Now: subtotal / cancelled_amount / delivery_fee
+    // straight from the API; a row is hidden if the API doesn't send it.
+    final delivery = order.deliveryFee;
     final discount = order.discount ?? 0.0;
-    final subtotal = order.total - delivery + discount;
+    final subtotal = order.subtotal;
+    final cancelled = order.cancelledAmount ?? 0.0;
 
     return Container(
       width: double.infinity,
@@ -982,7 +1011,8 @@ class _TotalCard extends StatelessWidget {
           PayChip(method: order.payMethod, paid: order.paid),
         ]),
         const SizedBox(height: 14),
-        _TotalRow(context.tr('subtotal'), subtotal),
+        if (subtotal != null) _TotalRow(context.tr('subtotal'), subtotal),
+        if (cancelled > 0) _TotalRow(context.tr('cancelledItems'), -cancelled, color: WTheme.err),
         if (discount > 0)
           _TotalRow(context.tr('discount'), -discount, color: WTheme.ok)
         else
@@ -993,7 +1023,7 @@ class _TotalCard extends StatelessWidget {
               Text(context.tr('noDiscount'), style: GoogleFonts.dmSans(fontSize: 12, color: WTheme.muted, fontWeight: FontWeight.w600)),
             ]),
           ),
-        _TotalRow(context.tr('deliveryFee'), delivery),
+        if (delivery != null) _TotalRow(context.tr('deliveryFee'), delivery),
         const SizedBox(height: 8),
         Container(
           width: double.infinity,
