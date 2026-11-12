@@ -274,6 +274,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                     );
                   }),
                   _HeroPill(text: '📦 ${order.items.length} item${order.items.length != 1 ? "s" : ""}'),
+                  // CLIENT-REQUESTED (2026-11-12): failed attempt — all from
+                  // API (failed_attempt / failed_attempts / failure_reason).
+                  if (order.failedAttempt)
+                    _HeroPill(
+                      text: '⚠ ${context.tr('failedAttempt')}'
+                          '${order.failedAttempts > 0 ? ' (${order.failedAttempts})' : ''}'
+                          '${(order.failureReason ?? '').trim().isNotEmpty ? ' · ${order.failureReason!.trim()}' : ''}',
+                      color: WTheme.err.withOpacity(0.75),
+                    ),
                 ]),
               ]),
             ),

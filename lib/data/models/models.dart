@@ -385,6 +385,13 @@ class Order {
   // endpoint doesn't send them (rows are then hidden, never calculated).
   final double? subtotal;
   final double? cancelledAmount;
+  // CLIENT-REQUESTED (2026-11-12): "Report as Failed" is now a FAILED
+  // ATTEMPT, not a cancellation — the order stays open and the driver
+  // can continue (On my way / Delivered). CONFIRMED field names on
+  // /orders/{code}: `failed_attempt` (bool), `failed_attempts` (count),
+  // `failure_reason` (already parsed into failureReason).
+  final bool failedAttempt;
+  final int failedAttempts;
   OrderStatus status;
   DriverState driverState;
   final double distanceKm;
@@ -442,6 +449,8 @@ class Order {
     this.deliveryFee,
     this.subtotal,
     this.cancelledAmount,
+    this.failedAttempt = false,
+    this.failedAttempts = 0,
     required this.status,
     required this.driverState,
     required this.distanceKm,
@@ -481,6 +490,7 @@ class Order {
       items: items, total: total, paid: paid, payMethod: payMethod,
       discount: discount, deliveryFee: deliveryFee,
       subtotal: subtotal, cancelledAmount: cancelledAmount,
+      failedAttempt: failedAttempt, failedAttempts: failedAttempts,
       status: status ?? this.status,
       driverState: driverState ?? this.driverState,
       distanceKm: distanceKm, etaMin: etaMin, pinPos: pinPos, pharmacies: pharmacies ?? this.pharmacies, mapLink: mapLink,
@@ -601,6 +611,8 @@ class Order {
       deliveryFee: (j['delivery_fee'] as num?)?.toDouble(),
       subtotal: j['subtotal'] == null ? null : double.tryParse('${j['subtotal']}'),
       cancelledAmount: j['cancelled_amount'] == null ? null : double.tryParse('${j['cancelled_amount']}'),
+      failedAttempt: j['failed_attempt'] == true || j['failed_attempt'] == 1 || j['failed_attempt'] == '1',
+      failedAttempts: int.tryParse('${j['failed_attempts'] ?? 0}') ?? 0,
       status: _resolveStatus(j),
       driverState: _driverStateFrom(j['driver_state']),
       distanceKm: (j['distance_km'] as num? ?? 0).toDouble(),

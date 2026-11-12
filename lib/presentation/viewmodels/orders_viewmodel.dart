@@ -612,11 +612,13 @@ class OrdersViewModel extends ChangeNotifier {
     if (o == null) return;
     final ok = await _guarded(() => _repo.fail(o.co ?? o.id, reason: reason));
     if (!ok) return;
-    _updateOrder(orderId, o.copyWith(
-      status: OrderStatus.failed,
-      driverState: DriverState.failed,
-      failureReason: reason,
-    ));
+    // CLIENT-REQUESTED (2026-11-12): a failed delivery is now a FAILED
+    // ATTEMPT — backend keeps the order open (failed_attempt: true) so the
+    // driver can continue with On my way / Delivered later. No longer
+    // forcing the order to failed/closed on the device; reload it from
+    // the API and show exactly what backend says (open + "Failed attempt",
+    // or closed if backend still closes it).
+    await refreshOrder(orderId, silent: true);
   }
 
   // ── Batch handling — now backed by real endpoints ──────────────

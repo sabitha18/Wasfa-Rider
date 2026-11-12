@@ -789,7 +789,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           onBack: () => _goTo('orderDetail'),
           onConfirm: (reason) {
             ordersVM.markFailed(order.id, reason);
-            _goTo('orders');
+            // CLIENT-REQUESTED (2026-11-12): failed attempt keeps the order
+            // open — back to its detail screen (not the list) so the driver
+            // can carry on from the current step later.
+            _goTo('orderDetail');
           },
         );
 
