@@ -1317,7 +1317,19 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
   Future<void> _pickPhoto() async {
     setState(() => _capturing = true);
     try {
-      final file = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+      // CLIENT-REPORTED (2026-11-17), iOS: "can't save building photo".
+      // CONFIRMED on Simulator: a 0.24 MB photo uploads fine, an iPhone-
+      // sized photo (~5 MB) gets 422 "The file failed to upload." — the
+      // server's PHP upload size limit. iPhone camera photos are 12–48 MP,
+      // so even at quality 85 they're several MB. Resize to max 1600px
+      // (~200–500 KB) — still sharp enough to recognise a building — and
+      // setting a max size also makes iOS always save a plain JPEG.
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 80,
+      );
       if (file == null) { setState(() => _capturing = false); return; } // driver backed out of the camera
       setState(() => _pickedFile = File(file.path));
     } catch (_) {
@@ -1349,7 +1361,13 @@ class _BuildingPhotosBlockState extends State<_BuildingPhotosBlock> {
       debugPrint('[BuildingPhotos] upload failed: $e');
       if (!mounted) return;
       setState(() => _uploading = false);
-      showWToast(context, "Couldn't upload the photo — please try again");
+      // Show the server's own reason (e.g. "The file failed to upload.")
+      // so a client screenshot tells us exactly why, instead of a generic
+      // message that hides it.
+      final reason = e.toString().trim();
+      showWToast(context, reason.isNotEmpty
+          ? "Couldn't upload the photo — $reason"
+          : "Couldn't upload the photo — please try again");
     }
   }
 

@@ -361,8 +361,15 @@ class OrderRepository {
   /// wrong. `customer_id` is optional; see order_detail_screen.dart for
   /// why it's not sent (order.id would misidentify the customer).
   Future<void> uploadBuildingPhoto(String co, String filePath, {String? customerId}) async {
+    // CLIENT-REPORTED (2026-11-17), iOS: explicit .jpg filename + image/jpeg
+    // type, so the server's file-type check never depends on whatever
+    // name/extension the iOS image picker gave the temp file.
     final form = FormData.fromMap({
-      'file': await MultipartFile.fromFile(filePath),
+      'file': await MultipartFile.fromFile(
+        filePath,
+        filename: 'building_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        contentType: DioMediaType('image', 'jpeg'),
+      ),
       if (customerId != null) 'customer_id': customerId,
     });
     await _api.postMultipart(
