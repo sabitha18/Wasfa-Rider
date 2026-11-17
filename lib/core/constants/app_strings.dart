@@ -110,6 +110,8 @@ class AppStrings {
       'cancelled':     'Cancelled',
       'cancelledItems': 'Cancelled items',
       'failedAttempt': 'Failed attempt',
+      'failedTab': 'Failed', // short tab label — same size as Active/Done/All
+      'waitingCallCenter': 'Failed attempt — waiting for call center',
       'discount':      '🎁 Discount',
       'discountCap':   '🎁 DISCOUNT',
       'noDiscount':    '— no discount',
@@ -393,6 +395,8 @@ class AppStrings {
       'cancelled':     'ملغي',
       'cancelledItems': 'المنتجات الملغاة',
       'failedAttempt': 'محاولة فاشلة',
+      'failedTab': 'فاشلة',
+      'waitingCallCenter': 'محاولة فاشلة — بانتظار مركز الاتصال',
       'discount':      '🎁 الخصم',
       'discountCap':   '🎁 الخصم',
       'noDiscount':    '— لا يوجد خصم',

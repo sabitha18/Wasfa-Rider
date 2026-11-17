@@ -73,6 +73,9 @@ class OrderRepository {
       'active': rawCounts is Map ? (int.tryParse('${rawCounts['active']}') ?? 0) : 0,
       'done': rawCounts is Map ? (int.tryParse('${rawCounts['done']}') ?? 0) : 0,
       'all': rawCounts is Map ? (int.tryParse('${rawCounts['all']}') ?? 0) : 0,
+      // CLIENT-REQUESTED (2026-11-17): CONFIRMED live — counts.failed
+      // for the new "Failed attempt" tab (tab=failed).
+      'failed': rawCounts is Map ? (int.tryParse('${rawCounts['failed']}') ?? 0) : 0,
     };
     return (orders: parsed.where((o) => o.id.isNotEmpty).toList(), counts: counts);
   }

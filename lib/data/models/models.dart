@@ -611,7 +611,12 @@ class Order {
       deliveryFee: (j['delivery_fee'] as num?)?.toDouble(),
       subtotal: j['subtotal'] == null ? null : double.tryParse('${j['subtotal']}'),
       cancelledAmount: j['cancelled_amount'] == null ? null : double.tryParse('${j['cancelled_amount']}'),
-      failedAttempt: j['failed_attempt'] == true || j['failed_attempt'] == 1 || j['failed_attempt'] == '1',
+      // CLIENT-REQUESTED (2026-11-17): CONFIRMED live on tab=failed —
+      // a failed-attempt order comes with driver_state "failed_attempt"
+      // + failed_attempt: true. Either one marks it (driverState itself
+      // stays the default, so no app-wide DriverState switch changes).
+      failedAttempt: j['failed_attempt'] == true || j['failed_attempt'] == 1 || j['failed_attempt'] == '1'
+          || '${j['driver_state'] ?? ''}'.toLowerCase() == 'failed_attempt',
       failedAttempts: int.tryParse('${j['failed_attempts'] ?? 0}') ?? 0,
       status: _resolveStatus(j),
       driverState: _driverStateFrom(j['driver_state']),

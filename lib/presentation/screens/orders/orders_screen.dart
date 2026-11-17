@@ -19,7 +19,11 @@ class OrdersScreen extends StatefulWidget {
     required this.onCallNow,
     required this.onOpenMap,
     required this.onOpenMultiPickup,
+    this.initialFilter = 'active',
   });
+  // CLIENT-REQUESTED (2026-11-17): opens straight on the "Failed attempt"
+  // tab right after the driver reports a failed delivery.
+  final String initialFilter;
   final ValueChanged<String> onTabChange;
   final ValueChanged<String> onOpenOrder;
   final VoidCallback onOpenBatchPickup;
@@ -50,6 +54,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void initState() {
     super.initState();
+    _filter = widget.initialFilter;
     WidgetsBinding.instance.addPostFrameCallback((_) => _reloadAllTabs());
   }
 
@@ -93,6 +98,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
     vm.loadTab('active', dateFrom: from, dateTo: to);
     vm.loadTab('done', dateFrom: from, dateTo: to);
     vm.loadTab('all', dateFrom: from, dateTo: to);
+    // CLIENT-REQUESTED (2026-11-17): new "Failed attempt" tab — list and
+    // count straight from GET /orders?tab=failed (counts.failed).
+    vm.loadTab('failed', dateFrom: from, dateTo: to);
   }
 
   bool _matchesDate(Order o) {
@@ -450,12 +458,12 @@ class _FilterTabs extends StatelessWidget {
     padding: const EdgeInsets.all(4),
     decoration: BoxDecoration(color: WTheme.cloud, borderRadius: BorderRadius.circular(14)),
     child: Row(children: [
-      for (final f in [('active', context.tr('active')), ('done', context.tr('done')), ('all', context.tr('all'))])
+      for (final f in [('active', context.tr('active')), ('failed', context.tr('failedTab')), ('done', context.tr('done')), ('all', context.tr('all'))])
         Expanded(child: GestureDetector(
           onTap: () => onChanged(f.$1),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(vertical: 9),
+            padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
             decoration: BoxDecoration(
               color: filter == f.$1 ? Colors.white : Colors.transparent,
               borderRadius: BorderRadius.circular(11),
@@ -463,9 +471,12 @@ class _FilterTabs extends StatelessWidget {
                   ? [BoxShadow(color: WTheme.navy.withOpacity(0.10), blurRadius: 6)]
                   : [],
             ),
-            child: Center(child: Text('${f.$2} (${count(vm, f.$1)})',
+            // FittedBox: 4 tabs now — "Failed attempt (n)" shrinks to fit
+            // narrow phones instead of overflowing.
+            child: Center(child: FittedBox(fit: BoxFit.scaleDown, child: Text('${f.$2} (${count(vm, f.$1)})',
+                maxLines: 1,
                 style: GoogleFonts.dmSans(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: filter == f.$1 ? WTheme.rose : WTheme.muted))),
+                    color: filter == f.$1 ? WTheme.rose : WTheme.muted)))),
           ),
         )),
     ]),
@@ -724,7 +735,8 @@ class _OrderListCard extends StatelessWidget {
                     Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
                       PayChip(method: order.payMethod, paid: order.paid),
                       DriverStatePill(state: order.driverState, small: true,
-                          pharmaciesPicked: order.pharmaciesPicked, pharmaciesTotal: order.pharmaciesTotal),
+                          pharmaciesPicked: order.pharmaciesPicked, pharmaciesTotal: order.pharmaciesTotal,
+                          failedAttempt: order.failedAttempt),
                       if (order.status != OrderStatus.done && order.status != OrderStatus.failed)
                         SlaCountdown(order: order, size: 's'),
                     ]),

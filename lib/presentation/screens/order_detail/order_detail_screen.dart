@@ -180,7 +180,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 const SizedBox(height: 10),
                 // Status pills row
                 Wrap(spacing: 6, runSpacing: 6, children: [
-                  _HeroPill(text: '${_driverIcon(order.driverState)} ${_driverLabel(context, order.driverState)}'),
+                  // CLIENT-REQUESTED (2026-11-17): a failed-attempt order
+                  // shows "Failed attempt" (pill below) instead of a step.
+                  if (!order.failedAttempt)
+                    _HeroPill(text: '${_driverIcon(order.driverState)} ${_driverLabel(context, order.driverState)}'),
                   _HeroPill(
                     // CLIENT-REPORTED (2026-08-25): this used the raw
                     // enum name directly, which for PayMethod.online
@@ -333,6 +336,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           color: WTheme.blush,
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 22),
           child: Column(children: [
+            // CLIENT-REQUESTED (2026-11-17): failed attempt = parked until
+            // the call center reactivates it (back to Pending / Picked up
+            // → it returns to the Active tab). No swipe steps and no
+            // "Can't deliver" here meanwhile.
+            if (order.failedAttempt) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                decoration: BoxDecoration(
+                  color: WTheme.err.withOpacity(0.08),
+                  border: Border.all(color: WTheme.err, width: 1.5),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Center(child: Text('⚠ ${context.tr('waitingCallCenter')}',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.dmSans(color: WTheme.err, fontSize: 13, fontWeight: FontWeight.w800))),
+              ),
+            ] else ...[
             _DriverActionBar(
               order: order,
               onTransitionState: onTransitionState,
@@ -354,6 +376,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                     style: GoogleFonts.dmSans(color: WTheme.err, fontSize: 13, fontWeight: FontWeight.w700))),
               ),
             ),
+            ],
           ]),
         ),
       ]),

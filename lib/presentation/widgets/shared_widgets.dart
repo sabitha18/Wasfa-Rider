@@ -163,9 +163,12 @@ class StatusPill extends StatelessWidget {
 
 // ── Driver State Pill ──────────────────────────────────────────
 class DriverStatePill extends StatelessWidget {
-  const DriverStatePill({super.key, required this.state, this.small = false, this.pharmaciesPicked, this.pharmaciesTotal});
+  const DriverStatePill({super.key, required this.state, this.small = false, this.pharmaciesPicked, this.pharmaciesTotal, this.failedAttempt = false});
   final DriverState state;
   final bool small;
+  // CLIENT-REQUESTED (2026-11-17): failed-attempt orders (driver_state
+  // "failed_attempt" from API) show "Failed attempt" instead of a step.
+  final bool failedAttempt;
   // CLIENT-CONFIRMED LIVE (2026-08-19): backend added these to the list
   // endpoint specifically for this — shows as "Collecting (1/3)" rather
   // than just "Collecting", so the driver can see multi-pharmacy pickup
@@ -176,6 +179,7 @@ class DriverStatePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (bg, fg, icon, baseLabel) = switch (state) {
+      _ when failedAttempt   => (WTheme.err.withOpacity(0.12),  WTheme.err,                      '⚠', 'Failed attempt'),
       DriverState.pending    => (Colors.grey.withOpacity(0.15), WTheme.muted,                   '⏳', 'Pending'),
       DriverState.collecting => (WTheme.aqua.withOpacity(0.20), const Color(0xFF2A9BBC),         '🛒', 'Collecting'),
       DriverState.pickedUp   => (WTheme.sky.withOpacity(0.15),  WTheme.sky,                      '📦', 'Picked up'),
@@ -183,7 +187,7 @@ class DriverStatePill extends StatelessWidget {
       DriverState.delivered  => (WTheme.ok.withOpacity(0.15),   WTheme.ok,                       '✓',  'Delivered'),
       DriverState.failed     => (WTheme.err.withOpacity(0.12),  WTheme.err,                      '🚫', 'Failed'),
     };
-    final label = (state == DriverState.collecting && pharmaciesTotal != null && pharmaciesTotal! > 1)
+    final label = (!failedAttempt && state == DriverState.collecting && pharmaciesTotal != null && pharmaciesTotal! > 1)
         ? '$baseLabel (${pharmaciesPicked ?? 0}/$pharmaciesTotal)'
         : baseLabel;
     return Container(

@@ -118,6 +118,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   String? _pendingPhone;
   String? _selectedOrderId;
+  // CLIENT-REQUESTED (2026-11-17): which Orders tab to open on — set to
+  // 'failed' right after "Report as Failed", back to 'active' otherwise.
+  String _ordersInitialFilter = 'active';
   String? _selectedPhId;
   String? _lastDeliveredId;
   // CLIENT-REQUESTED (2026-09-02): carries the real commission_earned
@@ -129,7 +132,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   // ── Navigation helpers ──────────────────────────────────────
   void _goTo(String screen) => setState(() => _screen = screen);
-  void _changeTab(String tab) => setState(() { _tab = tab; _screen = tab; });
+  void _changeTab(String tab) => setState(() { _tab = tab; _screen = tab; _ordersInitialFilter = 'active'; });
   String? _screenBeforeMap;
   String? _capturedPodPhotoPath;
   // CLIENT-REPORTED (2026-08-18): "amount given" wasn't showing up in the
@@ -600,8 +603,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     // ── ORDERS ───────────────────────────────────────────────
       case 'orders':
         return OrdersScreen(
+          initialFilter: _ordersInitialFilter,
           onTabChange: _changeTab,
-          onOpenOrder: (id) => setState(() { _selectedOrderId = id; _screen = 'orderDetail'; }),
+          onOpenOrder: (id) => setState(() { _selectedOrderId = id; _screen = 'orderDetail'; _ordersInitialFilter = 'active'; }),
           onOpenBatchPickup: () => _goTo('batchPickup'),
           onOpenMap: _openMapFor,
           onCallNow: (id) {
@@ -789,10 +793,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           onBack: () => _goTo('orderDetail'),
           onConfirm: (reason) {
             ordersVM.markFailed(order.id, reason);
-            // CLIENT-REQUESTED (2026-11-12): failed attempt keeps the order
-            // open — back to its detail screen (not the list) so the driver
-            // can carry on from the current step later.
-            _goTo('orderDetail');
+            // CLIENT-REQUESTED (2026-11-17): the order now leaves Active and
+            // waits in the new "Failed attempt" tab until the call center
+            // reactivates it — open the Orders list on that tab.
+            setState(() => _ordersInitialFilter = 'failed');
+            _goTo('orders');
           },
         );
 
