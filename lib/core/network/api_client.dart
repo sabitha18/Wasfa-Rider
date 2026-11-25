@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'api_config.dart';
 
 /// Thrown by ApiClient on any failed request. Catch this in
@@ -30,7 +31,9 @@ class ApiClient {
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
-        final token = await _storage.read(key: _tokenKey);
+        // Cached + Keychain-safe read (see readToken) — a Keychain error
+        // can no longer break the request itself.
+        final token = await readToken();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
         }
@@ -150,13 +153,77 @@ class ApiClient {
       old.close(force: true);
     } catch (_) {}
   }
-  final _storage = const FlutterSecureStorage();
+  // CLIENT-REPORTED (2026-11-18), iOS only: drivers get logged out after
+  // closing the app / after 1–2 hours. The token was stored with
+  // flutter_secure_storage's iOS default (Keychain "unlocked"), which can
+  // ONLY be read while the phone is unlocked. iOS often relaunches/wakes
+  // the app in the background (location, push) while the phone is locked
+  // — the read then returned nothing, the app started as "not logged in".
+  // first_unlock = readable any time after the phone was unlocked once
+  // since restart, including while locked / in the background.
+  // Android is unaffected by this option.
+  static const _iosOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  final _storage = const FlutterSecureStorage(iOptions: _iosOptions);
+  // Old default storage — only used once, to move existing drivers' tokens
+  // over to the new setting without logging anyone out.
+  final _legacyStorage = const FlutterSecureStorage();
   static const _tokenKey = 'wasfa_rider_auth_token';
+  static const _migratedKey = 'token_keychain_first_unlock_v1';
+  // Kept in memory after the first read — no Keychain read on every API
+  // call, and a running app never "loses" its token to a Keychain hiccup.
+  String? _cachedToken;
 
   // ── Token management ────────────────────────────────────────────
-  Future<void> saveToken(String token) => _storage.write(key: _tokenKey, value: token);
-  Future<String?> readToken() => _storage.read(key: _tokenKey);
-  Future<void> clearToken() => _storage.delete(key: _tokenKey);
+  Future<void> saveToken(String token) async {
+    _cachedToken = token;
+    await _storage.write(key: _tokenKey, value: token);
+    try {
+      (await SharedPreferences.getInstance()).setBool(_migratedKey, true);
+    } catch (_) {}
+  }
+
+  Future<String?> readToken() async {
+    if (_cachedToken != null) return _cachedToken;
+    await _migrateLegacyTokenOnce();
+    try {
+      _cachedToken = await _storage.read(key: _tokenKey);
+    } catch (e) {
+      // Keychain error (e.g. locked) — don't treat as "logged out" and
+      // don't crash the caller; just report no token for this attempt.
+      debugPrint('[ApiClient] token read failed (Keychain): $e');
+      return null;
+    }
+    return _cachedToken;
+  }
+
+  /// One-time move of a token saved with the old Keychain setting to the
+  /// new first_unlock setting (delete + re-write, so the item really gets
+  /// the new accessibility). Runs once per install; logged-in drivers
+  /// stay logged in through the update.
+  Future<void> _migrateLegacyTokenOnce() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_migratedKey) == true) return;
+      final old = await _legacyStorage.read(key: _tokenKey);
+      if (old != null) {
+        await _legacyStorage.delete(key: _tokenKey);
+        await _storage.write(key: _tokenKey, value: old);
+        _cachedToken = old;
+        debugPrint('[ApiClient] token moved to Keychain first_unlock');
+      }
+      await prefs.setBool(_migratedKey, true);
+    } catch (e) {
+      // Phone locked right now etc. — leave the flag unset, retry next time.
+      debugPrint('[ApiClient] token migration deferred: $e');
+    }
+  }
+
+  Future<void> clearToken() async {
+    _cachedToken = null;
+    try { await _storage.delete(key: _tokenKey); } catch (_) {}
+    try { await _legacyStorage.delete(key: _tokenKey); } catch (_) {}
+  }
+
   Future<bool> get hasToken async => (await readToken()) != null;
 
   // ── Verb helpers ──────────────────────────────────────────────

@@ -65,18 +65,62 @@ class AppViewModel extends ChangeNotifier {
           _language = _driver!.language!;
           await prefs.setString(_languagePrefsKey, _language);
         }
-      } catch (_) {
-        // Couldn't confirm the session (invalid/expired token, OR no
-        // network — a DNS/connection failure throws the same ApiException
-        // type). Either way, just clear the LOCAL token and fall back to
-        // the login screen. Deliberately NOT calling the full logout()
-        // here — that makes its own network call (POST /logout), which
-        // would ALSO fail if we're offline, throwing a second unhandled
-        // exception that used to hang the splash screen forever.
-        await ApiClient.instance.clearToken();
-        _isLoggedIn = false;
+      } on ApiException catch (e) {
+        _handleRestoreFailure(e, e.statusCode);
+      } catch (e) {
+        _handleRestoreFailure(e, null);
       }
       notifyListeners();
+    }
+  }
+
+  // CLIENT-REPORTED (2026-11-18), iOS: "it logs out when they close the
+  // app". Previously ANY /me failure on app start — no network, timeout,
+  // server error — deleted the token and showed login. iOS closes
+  // background apps far more often than Android, so a cold start on weak
+  // signal logged the driver out. Now: ONLY a 401 (server really rejected
+  // the token) logs out. Anything else keeps the session, opens the app,
+  // and retries /me quietly in the background.
+  // Not calling the full logout() here on purpose — it makes its own
+  // network call (POST /logout), which would also fail offline.
+  void _handleRestoreFailure(Object e, int? statusCode) {
+    if (statusCode == 401) {
+      debugPrint('[AppViewModel] /me returned 401 — token rejected by server, logging out');
+      ApiClient.instance.clearToken();
+      _isLoggedIn = false;
+      return;
+    }
+    debugPrint('[AppViewModel] /me failed on start (${statusCode ?? 'no response'}): $e — '
+        'keeping the session, retrying in background');
+    _isLoggedIn = true;
+    unawaited(_retryFetchMe());
+  }
+
+  /// Background retry of /me after a non-401 start-up failure: up to 5
+  /// tries (5s, 10s, 20s, 40s, 80s). Success fills in the driver profile
+  /// and puts the driver back on shift; a 401 clears the session.
+  Future<void> _retryFetchMe() async {
+    for (var attempt = 1; attempt <= 5; attempt++) {
+      await Future.delayed(Duration(seconds: 5 * (1 << (attempt - 1))));
+      if (!_isLoggedIn || _driver != null) return; // logged out, or already loaded elsewhere
+      try {
+        _driver = await _authRepo.fetchMe();
+        debugPrint('[AppViewModel] /me retry $attempt succeeded');
+        notifyListeners();
+        unawaited(setShiftAuto(true));
+        return;
+      } on ApiException catch (e) {
+        if (e.statusCode == 401) {
+          debugPrint('[AppViewModel] /me retry got 401 — token rejected, clearing session');
+          await ApiClient.instance.clearToken();
+          _isLoggedIn = false;
+          notifyListeners();
+          return;
+        }
+        debugPrint('[AppViewModel] /me retry $attempt failed: $e');
+      } catch (e) {
+        debugPrint('[AppViewModel] /me retry $attempt failed: $e');
+      }
     }
   }
 
